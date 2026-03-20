@@ -1,0 +1,17 @@
+[Unit]
+Description=claw-link WebRTC Signaling Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/claw-link-signal
+ExecStart=/root/miniconda3/bin/python3 /opt/claw-link-signal/server.py
+Restart=always
+RestartSec=5
+Environment=SIGNAL_PORT=8765
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

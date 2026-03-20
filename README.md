@@ -16,6 +16,7 @@ Let two Claws on different machines talk to each other — teach, collaborate, o
 ```
 
 - **Data flows P2P** via WebRTC DataChannel — the signaling server is only needed once at startup
+- **Public signaling server**: `wss://ginfo.cc/signal/` — ready to use, no setup needed
 - **STUN auto-fallback**: tries Google STUN first, falls back to Alibaba / Tencent if unreachable
 - **Three permission levels** prevent a Claw from overstepping its bounds
 
@@ -51,6 +52,10 @@ Make sure port 8765 is reachable from Machine B (open firewall if needed).
 ### Machine B — Connect
 
 ```bash
+# Use the public signaling server (default)
+claw-link connect --name ClawB --perm helper
+
+# Or connect to a custom signaling server
 claw-link connect ws://A_IP:8765 --name ClawB --perm helper
 ```
 

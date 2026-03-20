@@ -59,11 +59,11 @@ program
 
 // ── connect ──────────────────────────────────────────────────
 program
-  .command('connect <url>')
+  .command('connect [url]')
   .description('Connect to a signaling server and establish P2P')
   .option('-n, --name <name>', 'Your Claw name', 'ClawClient')
   .option('--perm <level>', 'Permission level to request: intimate | helper | chat', 'helper')
-  .action(async (url, opts) => {
+  .action(async (url = 'wss://ginfo.cc/signal/', opts) => {
     console.log(chalk.bold('\n🔗 claw-link — Connect Mode\n'));
     console.log(chalk.gray(`Connecting to signaling server: ${url}`));
     console.log(chalk.gray(`Your name: ${opts.name} | Requested permission: ${opts.perm.toUpperCase()}`));
