@@ -126,26 +126,25 @@ class SignalingServer:
     # -- payload validator ---------------------------------------------------
 
     @staticmethod
-    def _validate_payload(msg_type: str, payload: dict) -> tuple[bool, str]:
+    def _validate_payload(msg_type: str, payload) -> tuple[bool, str]:
         """Validate that payload matches expected schema for msg_type.
-        Returns (is_valid, error_reason)."""
-        if msg_type == "offer":
-            sdp = payload.get("sdp")
-            if not isinstance(sdp, dict):
-                return False, "offer missing sdp dict"
-            if sdp.get("type") != "offer":
-                return False, f"offer sdp.type mismatch: {sdp.get('type')}"
-            return True, ""
+        Returns (is_valid, error_reason).
 
-        if msg_type == "answer":
-            sdp = payload.get("sdp")
-            if not isinstance(sdp, dict):
-                return False, "answer missing sdp dict"
-            if sdp.get("type") != "answer":
-                return False, f"answer sdp.type mismatch: {sdp.get('type')}"
+        node-datachannel onLocalDescription gives (sdp: string, type: string).
+        Client sends: { type: "offer", payload: "<raw SDP string>" }
+        ICE sends:    { type: "ice", payload: { candidate, sdpMid, sdpMLineIndex } }
+        """
+        if msg_type in ("offer", "answer"):
+            # payload is the raw SDP string from node-datachannel
+            if not isinstance(payload, str):
+                return False, f"{msg_type} payload must be SDP string, got {type(payload).__name__}"
+            if not payload.startswith("v="):
+                return False, f"{msg_type} SDP does not start with 'v='"
             return True, ""
 
         if msg_type == "ice":
+            if not isinstance(payload, dict):
+                return False, "ice payload must be dict"
             if "candidate" not in payload:
                 return False, "ice missing candidate"
             if "sdpMid" not in payload:
@@ -221,8 +220,11 @@ class SignalingServer:
                     continue
 
                 # ── PAYLOAD VALIDATION ──
-                payload = msg.get("payload", {})
-                valid, reason = self._validate_payload(msg_type, payload or {})
+                payload = msg.get("payload")
+                if payload is None:
+                    log.warning("REJECT %s:%s – '%s' missing payload", ip, port, msg_type)
+                    continue
+                valid, reason = self._validate_payload(msg_type, payload)
                 if not valid:
                     log.warning("REJECT %s:%s – invalid '%s' payload: %s",
                                 ip, port, msg_type, reason)

@@ -8,50 +8,20 @@ const { negotiate, isPrivate, canPerform, describe } = require('./permissions');
 const { SessionManager } = require('./session');
 
 // ============================================================
-// STUN 服务器列表（带自动 fallback）
-// 优先 Google，不通自动转 Alibaba / Tencent
+// STUN 服务器列表
+// 国内可达优先，Google 作为海外 fallback
 // ============================================================
 const STUN_SERVERS = [
-  'stun:stun.l.google.com:19302',
-  'stun:stun1.l.google.com:19302',
-  'stun:stun.miwifi.com:3478',      // Xiaomi (国内可达)
   'stun:stun.qq.com:3478',          // Tencent
+  'stun:stun.miwifi.com:3478',      // Xiaomi
   'stun:stun.alidns.com:3478',      // Alibaba
+  'stun:stun.l.google.com:19302',   // Google (海外 fallback)
+  'stun:stun1.l.google.com:19302',
 ];
 
-/**
- * 测试 STUN 服务器是否可达（简单 TCP 连通测试）
- * @param {string} stunUri  格式: stun:host:port
- * @param {number} timeoutMs
- * @returns {Promise<boolean>}
- */
-function testStun(stunUri, timeoutMs = 2000) {
-  return new Promise((resolve) => {
-    const match = stunUri.match(/^stun:(.+):(\d+)$/);
-    if (!match) return resolve(false);
-    const [, host, portStr] = match;
-    const port = parseInt(portStr, 10);
-    const net = require('net');
-    const sock = new net.Socket();
-    const timer = setTimeout(() => { sock.destroy(); resolve(false); }, timeoutMs);
-    sock.connect(port, host, () => {
-      clearTimeout(timer);
-      sock.destroy();
-      resolve(true);
-    });
-    sock.on('error', () => { clearTimeout(timer); resolve(false); });
-  });
-}
-
-/**
- * 选出可用的 STUN 服务器列表（按优先级尝试，至少返回两个）
- * @returns {Promise<string[]>}
- */
-async function selectStunServers() {
-  // STUN uses UDP — TCP connect test is unreliable.
-  // Just return top-priority servers; WebRTC handles fallback natively.
+function selectStunServers() {
   const candidates = STUN_SERVERS.slice(0, 3);
-  console.log(chalk.gray("[STUN] Using: " + candidates.join(", ")));
+  console.log(chalk.gray('[STUN] Using: ' + candidates.join(', ')));
   return candidates;
 }
 
@@ -83,7 +53,7 @@ class ClawClient {
 
   /** 启动客户端 */
   async start() {
-    const stunServers = await selectStunServers();
+    const stunServers = selectStunServers();
 
     console.log(chalk.gray(`[Signaling] Connecting to ${this.signalingUrl} ...`));
     this.ws = new WebSocket(this.signalingUrl);
