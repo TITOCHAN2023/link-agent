@@ -8,55 +8,21 @@ const { negotiate, isPrivate, canPerform, describe } = require('./permissions');
 const { SessionManager } = require('./session');
 
 // ============================================================
-// STUN 服务器列表（带自动 fallback）
-// 优先 Google，不通自动转 Alibaba / Tencent
+// STUN 服务器列表
+// 国内可达优先，Google 作为海外 fallback
 // ============================================================
 const STUN_SERVERS = [
-  'stun:stun.l.google.com:19302',
-  'stun:stun1.l.google.com:19302',
-  'stun:stun.miwifi.com:3478',      // Xiaomi (国内可达)
   'stun:stun.qq.com:3478',          // Tencent
+  'stun:stun.miwifi.com:3478',      // Xiaomi
   'stun:stun.alidns.com:3478',      // Alibaba
+  'stun:stun.l.google.com:19302',   // Google (海外 fallback)
+  'stun:stun1.l.google.com:19302',
 ];
 
-/**
- * 测试 STUN 服务器是否可达（简单 TCP 连通测试）
- * @param {string} stunUri  格式: stun:host:port
- * @param {number} timeoutMs
- * @returns {Promise<boolean>}
- */
-function testStun(stunUri, timeoutMs = 2000) {
-  return new Promise((resolve) => {
-    const match = stunUri.match(/^stun:(.+):(\d+)$/);
-    if (!match) return resolve(false);
-    const [, host, portStr] = match;
-    const port = parseInt(portStr, 10);
-    const net = require('net');
-    const sock = new net.Socket();
-    const timer = setTimeout(() => { sock.destroy(); resolve(false); }, timeoutMs);
-    sock.connect(port, host, () => {
-      clearTimeout(timer);
-      sock.destroy();
-      resolve(true);
-    });
-    sock.on('error', () => { clearTimeout(timer); resolve(false); });
-  });
-}
-
-/**
- * 选出可用的 STUN 服务器列表（按优先级尝试，至少返回两个）
- * @returns {Promise<string[]>}
- */
-async function selectStunServers() {
-  const results = await Promise.all(STUN_SERVERS.map(async (s) => ({ s, ok: await testStun(s) })));
-  const reachable = results.filter((r) => r.ok).map((r) => r.s);
-  if (reachable.length === 0) {
-    // 全不通，降级返回全部（让 WebRTC 自己处理）
-    console.log(chalk.yellow('[STUN] Warning: no STUN server reachable, using all as fallback'));
-    return STUN_SERVERS;
-  }
-  console.log(chalk.gray(`[STUN] Using: ${reachable.slice(0, 2).join(', ')}`));
-  return reachable.slice(0, 3);
+function selectStunServers() {
+  const candidates = STUN_SERVERS.slice(0, 3);
+  console.log(chalk.gray('[STUN] Using: ' + candidates.join(', ')));
+  return candidates;
 }
 
 // ============================================================
@@ -87,7 +53,7 @@ class ClawClient {
 
   /** 启动客户端 */
   async start() {
-    const stunServers = await selectStunServers();
+    const stunServers = selectStunServers();
 
     console.log(chalk.gray(`[Signaling] Connecting to ${this.signalingUrl} ...`));
     this.ws = new WebSocket(this.signalingUrl);
@@ -126,13 +92,16 @@ class ClawClient {
         console.log(chalk.gray(`[Signaling] ${msg.payload.message}`));
         this._initPeerConnection(stunServers);
         if (this.role === 'offerer') {
-          await this._createOffer();
+          // Don't create offer yet — wait for peer-joined to avoid race condition
+          console.log(chalk.gray('[Signaling] Waiting for peer before creating offer...'));
         }
         break;
       }
       case 'peer-joined': {
         console.log(chalk.gray('[Signaling] Peer has joined! Creating offer...'));
-        // offerer 已在 ready 时初始化，直接 create offer
+        if (this.role === 'offerer') {
+          await this._createOffer();
+        }
         break;
       }
       case 'offer': {
@@ -164,14 +133,16 @@ class ClawClient {
 
   /** 初始化 PeerConnection */
   _initPeerConnection(stunServers) {
-    const iceServers = stunServers.map((s) => ({ urls: s }));
+    const iceServers = stunServers; // node-datachannel expects string[], not [{urls}]
     this.pc = new nodeDataChannel.PeerConnection(this.name, { iceServers });
 
     this.pc.onLocalDescription((sdp, type) => {
+      console.log(chalk.gray(`[P2P] onLocalDescription: type=${type}`));
       this._sendSignal({ type, payload: sdp });
     });
 
     this.pc.onLocalCandidate((candidate, mid) => {
+      console.log(chalk.gray(`[P2P] onLocalCandidate: mid=${mid}`));
       this._sendSignal({ type: 'ice', payload: { candidate, sdpMid: mid, sdpMLineIndex: 0 } });
     });
 
@@ -180,14 +151,13 @@ class ClawClient {
       this._setupDataChannel(dc);
     });
 
-    if (this.role === 'offerer') {
-      const dc = this.pc.createDataChannel('claw-link');
-      this._setupDataChannel(dc);
-    }
+    // Defer DataChannel creation + offer to _createOffer() (called on peer-joined)
   }
 
   /** 创建 Offer */
   async _createOffer() {
+    const dc = this.pc.createDataChannel('claw-link');
+    this._setupDataChannel(dc);
     this.pc.setLocalDescription();
   }
 
