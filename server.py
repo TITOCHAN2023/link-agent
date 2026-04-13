@@ -145,39 +145,30 @@ class SignalingServer:
 
     # -- room management ----------------------------------------------------
 
-    def _parse_room_id(self, path: str) -> tuple[str | None, bool]:
-        """Parse URL path → (room_id, is_creator).
+    def _parse_room_id(self, path: str) -> str | None:
+        """Parse URL path → room_id or None (auto-generate).
 
-        /             → (None, True)    create new room
-        /signal/      → (None, True)    create new room (behind nginx)
-        /abc123       → ("abc123", False)
-        /signal/abc   → ("abc", False)  (behind nginx)
+        /             → None
+        /signal/      → None       (behind nginx)
+        /abc123       → "abc123"
+        /signal/abc   → "abc"      (behind nginx)
         """
         parts = [p for p in path.strip("/").split("/") if p]
-        # Strip "signal" prefix (nginx proxy)
         if parts and parts[0] == "signal":
             parts = parts[1:]
-        if not parts:
-            return None, True
-        return parts[0], False
+        return parts[0] if parts else None
 
     async def _get_or_create_room(self, room_id: str | None) -> tuple[Room | None, str]:
-        """Returns (room, room_id). room is None if at capacity or not found."""
+        """Returns (room, room_id). room is None only if at capacity."""
         async with self.global_lock:
-            if room_id is not None:
-                # Joining existing room
-                room = self.rooms.get(room_id)
-                if room is None:
-                    return None, room_id
-                return room, room_id
-            # Creating new room
-            if len(self.rooms) >= MAX_ROOMS:
-                return None, ""
-            new_id = secrets.token_hex(4)
-            room = Room(new_id)
-            self.rooms[new_id] = room
-            log.info("Room '%s' created (%d total)", new_id, len(self.rooms))
-            return room, new_id
+            if len(self.rooms) >= MAX_ROOMS and (room_id is None or room_id not in self.rooms):
+                return None, room_id or ""
+            # Use provided ID or generate one
+            rid = room_id or secrets.token_hex(4)
+            if rid not in self.rooms:
+                self.rooms[rid] = Room(rid)
+                log.info("Room '%s' created (%d total)", rid, len(self.rooms))
+            return self.rooms[rid], rid
 
     async def _cleanup_stale_rooms(self):
         while True:
@@ -204,8 +195,8 @@ class SignalingServer:
         ip, port = ws.remote_address[0], ws.remote_address[1]
         path = ws.request.path if ws.request else "/"
 
-        parsed_id, is_creator = self._parse_room_id(path)
-        log.info("Connection from %s:%s path='%s' creator=%s", ip, port, path, is_creator)
+        parsed_id = self._parse_room_id(path)
+        log.info("Connection from %s:%s path='%s' room=%s", ip, port, path, parsed_id or "(auto)")
 
         # Cooldown
         remaining = self._check_cooldown(ip)
@@ -218,10 +209,7 @@ class SignalingServer:
         # Get/create room
         room, room_id = await self._get_or_create_room(parsed_id)
         if room is None:
-            if parsed_id is not None:
-                msg = f"Room '{parsed_id}' not found"
-            else:
-                msg = "Server at capacity"
+            msg = "Server at capacity"
             log.warning("REJECT %s: %s", ip, msg)
             await self._send(ws, {"type": "error", "payload": msg})
             await ws.close(1008, msg)
