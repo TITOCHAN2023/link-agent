@@ -5,7 +5,7 @@
   "bin": {
     "claw-link": "./bin/claw-link.js"
   },
-  "main": "src/cli.js",
+  "main": "index.js",
   "type": "commonjs",
   "engines": {
     "node": ">=18"
