@@ -48,15 +48,11 @@ function testStun(stunUri, timeoutMs = 2000) {
  * @returns {Promise<string[]>}
  */
 async function selectStunServers() {
-  const results = await Promise.all(STUN_SERVERS.map(async (s) => ({ s, ok: await testStun(s) })));
-  const reachable = results.filter((r) => r.ok).map((r) => r.s);
-  if (reachable.length === 0) {
-    // 全不通，降级返回全部（让 WebRTC 自己处理）
-    console.log(chalk.yellow('[STUN] Warning: no STUN server reachable, using all as fallback'));
-    return STUN_SERVERS;
-  }
-  console.log(chalk.gray(`[STUN] Using: ${reachable.slice(0, 2).join(', ')}`));
-  return reachable.slice(0, 3);
+  // STUN uses UDP — TCP connect test is unreliable.
+  // Just return top-priority servers; WebRTC handles fallback natively.
+  const candidates = STUN_SERVERS.slice(0, 3);
+  console.log(chalk.gray("[STUN] Using: " + candidates.join(", ")));
+  return candidates;
 }
 
 // ============================================================
@@ -126,13 +122,16 @@ class ClawClient {
         console.log(chalk.gray(`[Signaling] ${msg.payload.message}`));
         this._initPeerConnection(stunServers);
         if (this.role === 'offerer') {
-          await this._createOffer();
+          // Don't create offer yet — wait for peer-joined to avoid race condition
+          console.log(chalk.gray('[Signaling] Waiting for peer before creating offer...'));
         }
         break;
       }
       case 'peer-joined': {
         console.log(chalk.gray('[Signaling] Peer has joined! Creating offer...'));
-        // offerer 已在 ready 时初始化，直接 create offer
+        if (this.role === 'offerer') {
+          await this._createOffer();
+        }
         break;
       }
       case 'offer': {
@@ -164,14 +163,16 @@ class ClawClient {
 
   /** 初始化 PeerConnection */
   _initPeerConnection(stunServers) {
-    const iceServers = stunServers.map((s) => ({ urls: s }));
+    const iceServers = stunServers; // node-datachannel expects string[], not [{urls}]
     this.pc = new nodeDataChannel.PeerConnection(this.name, { iceServers });
 
     this.pc.onLocalDescription((sdp, type) => {
+      console.log(chalk.gray(`[P2P] onLocalDescription: type=${type}`));
       this._sendSignal({ type, payload: sdp });
     });
 
     this.pc.onLocalCandidate((candidate, mid) => {
+      console.log(chalk.gray(`[P2P] onLocalCandidate: mid=${mid}`));
       this._sendSignal({ type: 'ice', payload: { candidate, sdpMid: mid, sdpMLineIndex: 0 } });
     });
 
@@ -180,14 +181,13 @@ class ClawClient {
       this._setupDataChannel(dc);
     });
 
-    if (this.role === 'offerer') {
-      const dc = this.pc.createDataChannel('claw-link');
-      this._setupDataChannel(dc);
-    }
+    // Defer DataChannel creation + offer to _createOffer() (called on peer-joined)
   }
 
   /** 创建 Offer */
   async _createOffer() {
+    const dc = this.pc.createDataChannel('claw-link');
+    this._setupDataChannel(dc);
     this.pc.setLocalDescription();
   }
 
