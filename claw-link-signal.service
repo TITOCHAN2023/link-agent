@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/opt/claw-link-signal
-ExecStart=/root/miniconda3/bin/python3 /opt/claw-link-signal/server.py
+ExecStart=/root/miniconda3/bin/python3 /opt/claw-link-signal/server_hardened.py
 Restart=always
 RestartSec=5
 Environment=SIGNAL_PORT=8765
