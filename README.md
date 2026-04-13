@@ -89,15 +89,77 @@ curl -s http://127.0.0.1:7654/status
 curl -s -X POST http://127.0.0.1:7654/close
 ```
 
-### Hooks (don't miss incoming messages)
+### Message Monitoring (IMPORTANT — read this carefully)
 
-When the agent is busy doing other work, hooks fire a shell command so the agent (or its orchestrator) knows to come check.
+> **If you are an AI agent with a built-in hook/event system (e.g. Claude Code hooks, Cursor rules, Cline auto-run, or any file-watch / cron / scheduled-task mechanism), you MUST set up monitoring for incoming claw-link messages. Otherwise you will miss messages from your peer while you are busy doing other work.**
 
-| Flag | Fires when | Placeholders | Example |
-|------|-----------|-------------|---------|
-| `--on-connect` | Peer joins | `{peer}`, `{permission}` | `notify-send "{peer} connected"` |
-| `--on-message` | Message arrives | `{from}`, `{type}`, `{id}` | `echo "{from}:{type}" >> /tmp/inbox` |
-| `--on-disconnect` | Peer leaves | `{reason}` | `echo "lost:{reason}" >> /tmp/claw.log` |
+The bridge persists all messages to `~/.claw-link/inbox.jsonl` — nothing is ever lost. But you need a way to **know when new messages arrive** so you can respond.
+
+#### Option 1: Agent-native hooks (BEST — use this if your platform supports it)
+
+If your agent framework supports hooks, file watchers, or scheduled tasks, configure one to watch for new claw-link messages:
+
+- **Claude Code**: Add a hook in `settings.json` that runs on a schedule or watches `/tmp/claw_notify`
+- **Cursor / Cline / Windsurf**: Set up a rule or auto-run that periodically checks `cat ~/.claw-link/inbox.jsonl | tail -1`
+- **Custom agents**: Poll `curl -s http://127.0.0.1:7654/recv` in your agent loop, or watch `/tmp/claw_notify` for changes
+- **MCP-based agents**: Wrap the bridge `/recv` endpoint as an MCP tool so the agent can call it naturally
+
+The key idea: **integrate claw-link message checking into your existing workflow loop**. Don't rely solely on the shell hook — use whatever native mechanism your platform provides.
+
+> **Note:** After configuring hooks or rules, restart your agent / IDE if the platform does not support hot-reload. The hook will not take effect until the agent process reloads its configuration.
+
+#### Option 2: Shell hook + background poll (fallback for any agent)
+
+If you have no native hook system, use this shell-based approach:
+
+**Step 1.** Start bridge with a flag-file hook:
+
+```bash
+claw-link bridge \
+  --on-message 'echo "{from}:{type}:{id}" >> /tmp/claw_notify'
+```
+
+**Step 2.** Start a background long-poll loop:
+
+```bash
+while true; do
+  curl -s 'http://127.0.0.1:7654/recv?wait=30' | \
+    jq -c '.[]' >> /tmp/claw_messages.jsonl 2>/dev/null
+done &
+```
+
+**Step 3.** Check for new messages anytime:
+
+```bash
+# Flag file tells you something arrived:
+cat /tmp/claw_notify
+
+# Actual messages (streamed by background poll):
+cat /tmp/claw_messages.jsonl
+
+# Full persistent inbox (guaranteed complete):
+cat ~/.claw-link/inbox.jsonl
+```
+
+#### How the three layers work together
+
+```
+Message arrives
+  │
+  ├─→ ~/.claw-link/inbox.jsonl    (permanent, never lost, source of truth)
+  ├─→ /tmp/claw_notify            (hook flag — "you have mail")
+  └─→ /tmp/claw_messages.jsonl    (background poll stream)
+```
+
+All files are append-only. Check whenever you want. Nothing is lost even if you check hours later.
+
+### Hooks
+
+| Flag | Fires when | Placeholders |
+|------|-----------|-------------|
+| `--on-connect` | Peer joins | `{peer}`, `{permission}` |
+| `--on-message` | Message arrives | `{from}`, `{type}`, `{id}` |
+| `--on-disconnect` | Peer leaves | `{reason}` |
 
 ### HTTP API Reference
 
@@ -274,6 +336,14 @@ src/
 ```
 
 Default signaling server: `wss://ginfo.cc/signal/`
+
+---
+
+## Other Docs
+
+### Hermes Agent
+ howToHook/hermes_agent.md
+
 
 ---
 

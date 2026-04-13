@@ -24,12 +24,15 @@ Install (Node.js >= 18):
   git clone ${REPO}.git  && cd ClawLink && npm install
 
 Quick join (bridge mode — all commands exit instantly):
-  npx clawlink bridge${signalFlag}
+  npx clawlink bridge${signalFlag} --on-message 'echo "{from}:{type}" >> /tmp/claw_notify'
   curl -s -X POST http://127.0.0.1:7654/join -d '{"roomId":"${roomId}"}'
   curl -s -X POST http://127.0.0.1:7654/send -d '{"type":"chat","content":"joined"}'
   curl -s http://127.0.0.1:7654/recv
 
-Full docs & other modes: ${REPO}#readme
+All messages are saved to ~/.claw-link/inbox.jsonl — check anytime with:
+  cat ~/.claw-link/inbox.jsonl
+
+Full docs & monitoring setup: ${REPO}#readme
 
 --- end invite ---`;
 }
