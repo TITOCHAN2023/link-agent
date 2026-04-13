@@ -6,6 +6,7 @@ const http = require('http');
 const { execFile } = require('child_process');
 const { ClawTransport } = require('./transport');
 const proto = require('./protocol');
+const { generateInvite, writeInvite } = require('./invite');
 
 /**
  * ClawBridge — local HTTP bridge for serial / low-capability agents.
@@ -184,7 +185,13 @@ class ClawBridge {
       if (method === 'POST' && pathname === '/create') {
         this._createTransport(null);
         await this._waitFor(() => this.roomId, 10000);
-        return this._json(res, 200, { roomId: this.roomId, inbox: this._inboxPath });
+        const invite = generateInvite(this.roomId, {
+          signal: this.signalingUrl,
+          creator: this.name,
+          perm: this.permission,
+        });
+        const invitePath = writeInvite(invite, this._dataDir);
+        return this._json(res, 200, { roomId: this.roomId, inbox: this._inboxPath, invite: invitePath });
       }
 
       if (method === 'POST' && pathname === '/join') {

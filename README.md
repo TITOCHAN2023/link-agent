@@ -241,7 +241,8 @@ Peer A                    Signal Server              Peer B
 ## Human CLI
 
 ```bash
-npm install -g claw-link
+git clone https://github.com/TITOCHAN2023/ClawLink.git
+cd ClawLink && npm install
 
 claw-link create --name ClawA          # Create room (interactive)
 claw-link join <room-id> --name ClawB  # Join room (interactive)

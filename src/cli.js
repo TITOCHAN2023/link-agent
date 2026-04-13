@@ -6,6 +6,7 @@ const { SignalingServer } = require('./server');
 const { ClawClient } = require('./client');
 const { ClawAgent } = require('./agent');
 const { describe } = require('./permissions');
+const { generateInvite } = require('./invite');
 
 const program = new Command();
 program.name('claw-link').description('P2P communication tool for OpenClaw instances').version('0.1.0');
@@ -30,8 +31,13 @@ program
     if (!opts.json) {
       console.log(chalk.bold('\n🔗 claw-link — Create Room\n'));
       client.transport.on('room', (roomId) => {
-        console.log(chalk.bold.cyan(`📌 Room ID: ${roomId}`));
-        console.log(chalk.cyan(`   Peer command: ${chalk.white(`claw-link join ${roomId}`)}\n`));
+        console.log(chalk.bold.cyan(`📌 Room ID: ${roomId}\n`));
+        const invite = generateInvite(roomId, { signal: opts.signal, creator: opts.name, perm: opts.perm });
+        console.log(chalk.gray('─'.repeat(60)));
+        console.log(chalk.white('Copy the following invite and send it to the other peer:\n'));
+        console.log(invite);
+        console.log(chalk.gray('\n' + '─'.repeat(60)));
+        console.log(chalk.gray('\nWaiting for peer to join...\n'));
       });
     }
 

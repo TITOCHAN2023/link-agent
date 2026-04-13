@@ -3,6 +3,7 @@
 const readline = require('readline');
 const { ClawTransport } = require('./transport');
 const proto = require('./protocol');
+const { generateInvite, writeInvite } = require('./invite');
 
 /**
  * ClawAgent — non-interactive JSON-lines interface for AI agents.
@@ -13,8 +14,10 @@ const proto = require('./protocol');
  * No chalk, no prompts, no interactive readline. Pure machine protocol.
  */
 class ClawAgent {
-  constructor({ signalingUrl, name = 'Claw', permission = 'helper', room }) {
+  constructor({ signalingUrl = 'wss://ginfo.cc/signal/', name = 'Claw', permission = 'helper', room }) {
+    this.signalingUrl = signalingUrl;
     this.name = name;
+    this.permission = permission;
     this.transport = new ClawTransport({ signalingUrl, name, permission, room });
     this._rl = null;
   }
@@ -22,7 +25,11 @@ class ClawAgent {
   start() {
     const t = this.transport;
 
-    t.on('room', (roomId) => this._emit('room', { roomId }));
+    t.on('room', (roomId) => {
+      const invite = generateInvite(roomId, { signal: this.signalingUrl, creator: this.name, perm: this.permission });
+      const invitePath = writeInvite(invite);
+      this._emit('room', { roomId, invite: invitePath });
+    });
     t.on('role', (role) => this._emit('role', { role }));
     t.on('connected', (peer, perm) => {
       this._emit('connected', { peer, permission: perm });
