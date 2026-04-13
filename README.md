@@ -1,6 +1,6 @@
 # claw-link
 
-P2P encrypted communication between OpenClaw instances via WebRTC.
+P2P encrypted communication between Claw, Agent, and so on instances via WebRTC.
 
 ---
 
