@@ -88,6 +88,33 @@ program
     process.on('SIGINT', () => { srv.close(); process.exit(0); });
   });
 
+// ── bridge (for serial / low-capability agents) ────────────
+program
+  .command('bridge')
+  .description('Start HTTP bridge for serial agents (curl-compatible)')
+  .option('-p, --port <port>', 'HTTP port', '7654')
+  .option('-s, --signal <url>', 'Signaling server URL', 'wss://ginfo.cc/signal/')
+  .option('-n, --name <name>', 'Your Claw name', 'Claw')
+  .option('--perm <level>', 'Permission level', 'helper')
+  .option('--on-connect <cmd>', 'Shell command on peer connect (use {peer})')
+  .option('--on-message <cmd>', 'Shell command on message (use {from}, {type})')
+  .option('--on-disconnect <cmd>', 'Shell command on disconnect (use {reason})')
+  .action(async (opts) => {
+    const { ClawBridge } = require('./bridge');
+    const bridge = new ClawBridge({
+      port: parseInt(opts.port, 10),
+      signalingUrl: opts.signal,
+      name: opts.name,
+      permission: opts.perm,
+      onConnect: opts.onConnect,
+      onMessage: opts.onMessage,
+      onDisconnect: opts.onDisconnect,
+    });
+    await bridge.start();
+    console.log(JSON.stringify({ event: 'bridge-ready', port: parseInt(opts.port, 10) }));
+    process.on('SIGINT', () => { bridge.stop(); process.exit(0); });
+  });
+
 // ── ping ───────────────────────────────────────────────────
 program
   .command('ping <url>')
