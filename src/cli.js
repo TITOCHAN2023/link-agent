@@ -89,30 +89,107 @@ program
   });
 
 // ── bridge (for serial / low-capability agents) ────────────
-program
+// Default: daemon mode — fork to background, print pid+port, exit immediately.
+// Agent runs this once, gets JSON back, command finishes, agent continues with curl.
+const bridgeCmd = program
   .command('bridge')
-  .description('Start HTTP bridge for serial agents (curl-compatible)')
+  .description('Start HTTP bridge for serial agents (auto-daemonizes)')
   .option('-p, --port <port>', 'HTTP port', '7654')
   .option('-s, --signal <url>', 'Signaling server URL', 'wss://ginfo.cc/signal/')
   .option('-n, --name <name>', 'Your Claw name', 'Claw')
   .option('--perm <level>', 'Permission level', 'helper')
+  .option('--data-dir <path>', 'Directory for inbox/events files', '')
   .option('--on-connect <cmd>', 'Shell command on peer connect (use {peer})')
   .option('--on-message <cmd>', 'Shell command on message (use {from}, {type})')
   .option('--on-disconnect <cmd>', 'Shell command on disconnect (use {reason})')
+  .option('--foreground', 'Run in foreground (don\'t daemonize)')
+  .option('--daemon-child', '(internal) actual bridge process')
   .action(async (opts) => {
-    const { ClawBridge } = require('./bridge');
-    const bridge = new ClawBridge({
-      port: parseInt(opts.port, 10),
+    const port = parseInt(opts.port, 10);
+    const bridgeOpts = {
+      port,
       signalingUrl: opts.signal,
       name: opts.name,
       permission: opts.perm,
+      dataDir: opts.dataDir || undefined,
       onConnect: opts.onConnect,
       onMessage: opts.onMessage,
       onDisconnect: opts.onDisconnect,
+    };
+
+    // ── If this is the daemon child, run the bridge ──
+    if (opts.daemonChild) {
+      const { ClawBridge } = require('./bridge');
+      const bridge = new ClawBridge(bridgeOpts);
+      await bridge.start();
+      // Tell parent we're ready
+      if (process.send) process.send({ ready: true, port, pid: process.pid });
+      process.on('SIGINT', () => { bridge.stop(); process.exit(0); });
+      process.on('SIGTERM', () => { bridge.stop(); process.exit(0); });
+      return;
+    }
+
+    // ── Foreground mode ──
+    if (opts.foreground) {
+      const { ClawBridge } = require('./bridge');
+      const bridge = new ClawBridge(bridgeOpts);
+      await bridge.start();
+      console.log(JSON.stringify({ pid: process.pid, port }));
+      process.on('SIGINT', () => { bridge.stop(); process.exit(0); });
+      return;
+    }
+
+    // ── Daemon mode: fork child, wait for ready, print result, exit ──
+    const { fork } = require('child_process');
+    const args = process.argv.slice(2).concat('--daemon-child');
+    const child = fork(process.argv[1], args, {
+      detached: true,
+      stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
     });
-    await bridge.start();
-    console.log(JSON.stringify({ event: 'bridge-ready', port: parseInt(opts.port, 10) }));
-    process.on('SIGINT', () => { bridge.stop(); process.exit(0); });
+
+    child.on('message', (msg) => {
+      if (msg.ready) {
+        console.log(JSON.stringify({ pid: child.pid, port: msg.port }));
+        child.unref();
+        child.disconnect();
+        process.exit(0);
+      }
+    });
+
+    child.on('error', (err) => {
+      console.log(JSON.stringify({ error: err.message }));
+      process.exit(1);
+    });
+
+    // Timeout: if child doesn't report ready in 5s, give up
+    setTimeout(() => {
+      console.log(JSON.stringify({ error: 'Bridge startup timeout' }));
+      child.kill();
+      process.exit(1);
+    }, 5000);
+  });
+
+// ── bridge stop ─────────────────────────────────────────────
+bridgeCmd
+  .command('stop')
+  .description('Stop a running bridge by PID or port')
+  .argument('[pid]', 'PID of bridge process')
+  .option('--kill-port <port>', 'Find by port instead of PID')
+  .action(async (pid, opts) => {
+    if (pid) {
+      try { process.kill(parseInt(pid, 10), 'SIGTERM'); console.log(JSON.stringify({ stopped: true, pid: parseInt(pid, 10) })); }
+      catch (e) { console.log(JSON.stringify({ error: e.message })); }
+    } else if (opts.killPort) {
+      const { execSync } = require('child_process');
+      try {
+        const out = execSync(`lsof -ti tcp:${opts.killPort}`, { encoding: 'utf8' }).trim();
+        const pids = out.split('\n').map(Number).filter(Boolean);
+        for (const p of pids) { try { process.kill(p, 'SIGTERM'); } catch {} }
+        console.log(JSON.stringify({ stopped: true, pids }));
+      } catch { console.log(JSON.stringify({ error: `No process on port ${opts.killPort}` })); }
+    } else {
+      console.log(JSON.stringify({ error: 'Provide PID or --kill-port' }));
+    }
   });
 
 // ── ping ───────────────────────────────────────────────────
