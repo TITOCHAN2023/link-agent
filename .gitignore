@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 *.log
 .DS_Store
+.vscode/
+node_modules/
+pnpm-lock.yaml
