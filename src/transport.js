@@ -4,6 +4,8 @@ const { EventEmitter } = require('events');
 const nodeDataChannel = require('node-datachannel');
 const WebSocket = require('ws');
 
+const MAX_DC_MSG = 256 * 1024; // 256 KB cap on DataChannel messages
+
 // STUN: China-accessible first, Google as overseas fallback
 const STUN_SERVERS = [
   'stun:stun.qq.com:3478',
@@ -22,26 +24,29 @@ const DEFAULT_SIGNALING = 'wss://ginfo.cc/signal/';
  * Agents and CLIs both use this as the sole communication primitive.
  *
  * Events:
+ *   'room'              (roomId: string)    — room ID assigned by server
  *   'connecting'        ()                  — signaling WS opened
  *   'role'              (role: string)      — assigned 'offerer' or 'answerer'
- *   'connected'         (peerName: string, permission: string) — P2P ready + handshake done
- *   'message'           (msg: object)       — received a P2P message (parsed JSON)
+ *   'connected'         (peerName, perm)    — P2P ready + handshake done
+ *   'message'           (msg: object)       — received a P2P message
  *   'disconnected'      (reason: string)    — peer or signaling gone
  *   'error'             (err: Error)        — recoverable error
- *   'log'               (text: string)      — debug info (optional to consume)
+ *   'log'               (text: string)      — debug info
  */
 class ClawTransport extends EventEmitter {
   /**
    * @param {object} opts
-   * @param {string} [opts.signalingUrl]  Signaling server URL
+   * @param {string} [opts.signalingUrl]  Signaling server base URL
    * @param {string} [opts.name]          Local peer name
    * @param {string} [opts.permission]    Requested permission: intimate|helper|chat
+   * @param {string} [opts.room]          Room ID to join (omit to create new room)
    * @param {string[]} [opts.stunServers] Override STUN server list
    */
   constructor({
     signalingUrl = DEFAULT_SIGNALING,
     name = 'Claw',
     permission = 'helper',
+    room,
     stunServers,
   } = {}) {
     super();
@@ -50,7 +55,9 @@ class ClawTransport extends EventEmitter {
     this.requestedPermission = permission;
     this.negotiatedPermission = null;
     this.peerName = null;
+    this.roomId = null;
 
+    this._room = room || null;
     this._stunServers = (stunServers || STUN_SERVERS).slice(0, 3);
     this._ws = null;
     this._pc = null;
@@ -62,13 +69,18 @@ class ClawTransport extends EventEmitter {
 
   // -- public API -----------------------------------------------------------
 
-  /** Start connection to signaling server. */
   connect() {
     if (this._closed) throw new Error('Transport is closed');
 
-    this._log(`Connecting to ${this.signalingUrl}`);
+    // Append room ID to URL if joining an existing room
+    let wsUrl = this.signalingUrl;
+    if (this._room) {
+      wsUrl = wsUrl.replace(/\/+$/, '') + '/' + this._room;
+    }
+
+    this._log(`Connecting to ${wsUrl}`);
     this._log(`STUN: ${this._stunServers.join(', ')}`);
-    this._ws = new WebSocket(this.signalingUrl);
+    this._ws = new WebSocket(wsUrl);
 
     this._ws.on('open', () => {
       this._log('Signaling connected, waiting for role');
@@ -94,15 +106,17 @@ class ClawTransport extends EventEmitter {
     });
   }
 
-  /** Send a structured message to the peer via DataChannel. */
   send(msg) {
     if (!this._dc || !this._dc.isOpen()) {
       throw new Error('DataChannel not open');
     }
-    this._dc.sendMessage(JSON.stringify(msg));
+    const raw = JSON.stringify(msg);
+    if (raw.length > MAX_DC_MSG) {
+      throw new Error(`Message too large: ${raw.length} bytes (max ${MAX_DC_MSG})`);
+    }
+    this._dc.sendMessage(raw);
   }
 
-  /** Gracefully close everything. */
   close() {
     this._closed = true;
     if (this._dc) try { this._dc.close(); } catch {}
@@ -113,16 +127,18 @@ class ClawTransport extends EventEmitter {
     this._ws = null;
   }
 
-  /** Whether P2P DataChannel is open and handshake is complete. */
-  get connected() {
-    return this._connected;
-  }
+  get connected() { return this._connected; }
 
   // -- signaling handler ----------------------------------------------------
 
   _onSignaling(msg) {
     switch (msg.type) {
       case 'ready': {
+        if (msg.payload.roomId) {
+          this.roomId = msg.payload.roomId;
+          this._log(`Room: ${this.roomId}`);
+          this.emit('room', this.roomId);
+        }
         this._role = msg.payload.role;
         this._log(`Role: ${this._role}`);
         this.emit('role', this._role);
@@ -148,9 +164,7 @@ class ClawTransport extends EventEmitter {
       }
       case 'ice': {
         if (msg.payload && this._pc) {
-          try {
-            this._pc.addRemoteCandidate(msg.payload.candidate, msg.payload.sdpMid);
-          } catch {}
+          try { this._pc.addRemoteCandidate(msg.payload.candidate, msg.payload.sdpMid); } catch {}
         }
         break;
       }
@@ -171,16 +185,13 @@ class ClawTransport extends EventEmitter {
     this._pc = new nodeDataChannel.PeerConnection(this.name, {
       iceServers: this._stunServers,
     });
-
     this._pc.onLocalDescription((sdp, type) => {
       this._log(`Local description: ${type}`);
       this._sendSignal({ type, payload: sdp });
     });
-
     this._pc.onLocalCandidate((candidate, mid) => {
       this._sendSignal({ type: 'ice', payload: { candidate, sdpMid: mid, sdpMLineIndex: 0 } });
     });
-
     this._pc.onDataChannel((dc) => {
       this._log('DataChannel received from peer');
       this._setupDC(dc);
@@ -195,7 +206,6 @@ class ClawTransport extends EventEmitter {
 
   _setupDC(dc) {
     this._dc = dc;
-
     dc.onOpen(() => {
       this._log('DataChannel open, sending handshake');
       this.send({
@@ -205,18 +215,19 @@ class ClawTransport extends EventEmitter {
         version: '0.1.0',
       });
     });
-
     dc.onMessage((raw) => {
+      if (typeof raw === 'string' && raw.length > MAX_DC_MSG) {
+        this.emit('error', new Error(`Received message too large: ${raw.length}`));
+        return;
+      }
       let data;
       try { data = JSON.parse(raw); } catch { return; }
       this._onData(data);
     });
-
     dc.onClosed(() => {
       this._connected = false;
       this.emit('disconnected', 'datachannel-closed');
     });
-
     dc.onError((err) => {
       this.emit('error', new Error(`DataChannel: ${err}`));
     });
@@ -242,13 +253,15 @@ class ClawTransport extends EventEmitter {
         break;
       }
       case 'handshake-ack': {
-        this.negotiatedPermission = data.negotiatedPermission;
+        // Never trust peer's claimed negotiatedPermission — compute locally
+        const { negotiate } = require('./permissions');
+        const verified = negotiate(this.requestedPermission, data.requestedPermission);
+        this.negotiatedPermission = verified;
         this.peerName = data.name;
-        this._onHandshakeDone(data.name, data.negotiatedPermission);
+        this._onHandshakeDone(data.name, verified);
         break;
       }
       default: {
-        // Everything else goes to the consumer
         this.emit('message', data);
         break;
       }
@@ -256,13 +269,11 @@ class ClawTransport extends EventEmitter {
   }
 
   _onHandshakeDone(peerName, permission) {
-    if (this._connected) return; // dedupe
+    if (this._connected) return;
     this._connected = true;
     this._log(`Handshake complete: peer=${peerName} perm=${permission}`);
     this.emit('connected', peerName, permission);
   }
-
-  // -- helpers --------------------------------------------------------------
 
   _sendSignal(obj) {
     if (this._ws && this._ws.readyState === WebSocket.OPEN) {
@@ -270,9 +281,7 @@ class ClawTransport extends EventEmitter {
     }
   }
 
-  _log(text) {
-    this.emit('log', text);
-  }
+  _log(text) { this.emit('log', text); }
 }
 
 module.exports = { ClawTransport, DEFAULT_SIGNALING, STUN_SERVERS };
