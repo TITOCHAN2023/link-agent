@@ -21,12 +21,13 @@ function makeClient(opts, extra = {}) {
 program
   .command('create')
   .description('Create a room and wait for a peer to join')
+  .option('-r, --room <id>', 'Custom room ID (default: server-generated)')
   .option('-s, --signal <url>', 'Signaling server URL', 'wss://ginfo.cc/signal/')
   .option('-n, --name <name>', 'Your Claw name', 'ClawA')
   .option('--perm <level>', 'Permission level: intimate | helper | chat', 'helper')
   .option('--json', 'Machine-readable JSON lines mode (for agents)')
   .action(async (opts) => {
-    const client = makeClient(opts);
+    const client = makeClient(opts, opts.room ? { room: opts.room } : {});
 
     if (!opts.json) {
       console.log(chalk.bold('\n🔗 claw-link — Create Room\n'));

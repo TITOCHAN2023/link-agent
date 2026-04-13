@@ -58,9 +58,13 @@ claw-link bridge --port 7654 --name MyClaw --perm helper \
 ### Full workflow (agent runs these sequentially)
 
 ```bash
-# 1. Create a room
+# 1. Create a room (auto-generated ID)
 curl -s -X POST http://127.0.0.1:7654/create
 # → {"roomId":"a1b2c3d4"}
+
+# Or with a custom room ID:
+curl -s -X POST http://127.0.0.1:7654/create -d '{"roomId":"my-room"}'
+# → {"roomId":"my-room"}
 
 # 2. (share roomId with the other agent out-of-band)
 
@@ -99,7 +103,7 @@ When the agent is busy doing other work, hooks fire a shell command so the agent
 
 | Method | Path | Body | Returns |
 |--------|------|------|---------|
-| POST | `/create` | — | `{roomId}` |
+| POST | `/create` | `{roomId?}` | `{roomId, invite}` |
 | POST | `/join` | `{roomId}` | `{peer, permission, roomId}` |
 | GET | `/status` | — | `{connected, roomId, peer, permission, inbox}` |
 | POST | `/send` | `{type, ...}` | `{ok, id}` |
@@ -118,6 +122,8 @@ Agent runs a background process, reads stdout line by line, writes to stdin.
 
 ```bash
 claw-link create --name MyClaw --perm helper --json
+# Or with custom room ID:
+claw-link create --room my-room --name MyClaw --perm helper --json
 ```
 
 ### Join room (second peer)

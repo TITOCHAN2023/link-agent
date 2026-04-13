@@ -35,21 +35,14 @@ class SignalingServer {
     const pathParts = pathname.split('/').filter(Boolean);
 
     let roomId;
-    let isCreator;
     if (pathParts.length > 0) {
       roomId = pathParts[pathParts.length - 1];
-      isCreator = false;
     } else {
       roomId = crypto.randomBytes(4).toString('hex');
-      isCreator = true;
     }
 
+    // Create room if it doesn't exist (first peer = creator, custom or auto ID)
     if (!this.rooms.has(roomId)) {
-      if (!isCreator) {
-        this._send(ws, { type: 'error', payload: `Room '${roomId}' not found` });
-        ws.close();
-        return;
-      }
       this.rooms.set(roomId, { peers: [] });
       this.log(`[${roomId}] Room created`);
     }

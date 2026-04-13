@@ -183,7 +183,8 @@ class ClawBridge {
 
     try {
       if (method === 'POST' && pathname === '/create') {
-        this._createTransport(null);
+        const body = await this._readBody(req);
+        this._createTransport(body.roomId || null);
         await this._waitFor(() => this.roomId, 10000);
         const invite = generateInvite(this.roomId, {
           signal: this.signalingUrl,
