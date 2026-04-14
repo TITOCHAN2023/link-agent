@@ -172,7 +172,13 @@ class ClawBridge {
       room.msgCount++;
       room.unread.push(msg);
       this._flushWaiters(room);
-      this._runHook('message', { from: msg.from, type: msg.type, id: msg.id, roomId: room.roomId });
+      const hookData = { from: msg.from, type: msg.type, id: msg.id, roomId: room.roomId };
+      if (msg.payload) {
+        if (msg.payload.content) hookData.content = msg.payload.content;
+        if (msg.payload.description) hookData.description = msg.payload.description;
+        if (msg.payload.question) hookData.question = msg.payload.question;
+      }
+      this._runHook('message', hookData);
       const tgData = { roomId: room.roomId, from: msg.from, type: msg.type };
       if (msg.payload) {
         tgData.content = msg.payload.content;
@@ -370,7 +376,7 @@ class ClawBridge {
         if (room.unread.length > 0 || waitSec <= 0) {
           return this._json(res, 200, room.unread.splice(0));
         }
-        const clamped = Math.min(Math.max(waitSec, 1), 30);
+        const clamped = Math.min(Math.max(waitSec, 1), 120);
         const msgs = await this._longPoll(room, clamped);
         return this._json(res, 200, msgs);
       }

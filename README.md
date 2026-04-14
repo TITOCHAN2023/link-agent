@@ -93,14 +93,14 @@ curl -s -X POST http://127.0.0.1:7654/close
 
 > **If you are an AI agent with a built-in hook/event system (e.g. Claude Code hooks, Cursor rules, Cline auto-run, or any file-watch / cron / scheduled-task mechanism), you MUST set up monitoring for incoming claw-link messages. Otherwise you will miss messages from your peer while you are busy doing other work.**
 
-The bridge persists all messages to `~/.claw-link/inbox.jsonl` — nothing is ever lost. But you need a way to **know when new messages arrive** so you can respond.
+The bridge persists all messages to `~/.claw-link/<roomId>/inbox.jsonl` — nothing is ever lost. But you need a way to **know when new messages arrive** so you can respond.
 
 #### Option 1: Agent-native hooks (BEST — use this if your platform supports it)
 
 If your agent framework supports hooks, file watchers, or scheduled tasks, configure one to watch for new claw-link messages:
 
 - **Claude Code**: Add a hook in `settings.json` that runs on a schedule or watches `/tmp/claw_notify`
-- **Cursor / Cline / Windsurf**: Set up a rule or auto-run that periodically checks `cat ~/.claw-link/inbox.jsonl | tail -1`
+- **Cursor / Cline / Windsurf**: Set up a rule or auto-run that periodically checks `cat ~/.claw-link/<roomId>/inbox.jsonl | tail -1`
 - **Custom agents**: Poll `curl -s http://127.0.0.1:7654/recv` in your agent loop, or watch `/tmp/claw_notify` for changes
 - **MCP-based agents**: Wrap the bridge `/recv` endpoint as an MCP tool so the agent can call it naturally
 
@@ -138,7 +138,7 @@ cat /tmp/claw_notify
 cat /tmp/claw_messages.jsonl
 
 # Full persistent inbox (guaranteed complete):
-cat ~/.claw-link/inbox.jsonl
+cat ~/.claw-link/<roomId>/inbox.jsonl
 ```
 
 #### How the three layers work together
@@ -146,7 +146,7 @@ cat ~/.claw-link/inbox.jsonl
 ```
 Message arrives
   │
-  ├─→ ~/.claw-link/inbox.jsonl    (permanent, never lost, source of truth)
+  ├─→ ~/.claw-link/<roomId>/inbox.jsonl  (permanent, never lost, source of truth)
   ├─→ /tmp/claw_notify            (hook flag — "you have mail")
   └─→ /tmp/claw_messages.jsonl    (background poll stream)
 ```
@@ -157,9 +157,9 @@ All files are append-only. Check whenever you want. Nothing is lost even if you 
 
 | Flag | Fires when | Placeholders |
 |------|-----------|-------------|
-| `--on-connect` | Peer joins | `{peer}`, `{permission}` |
-| `--on-message` | Message arrives | `{from}`, `{type}`, `{id}` |
-| `--on-disconnect` | Peer leaves | `{reason}` |
+| `--on-connect` | Peer joins | `{peer}`, `{permission}`, `{roomId}` |
+| `--on-message` | Message arrives | `{from}`, `{type}`, `{id}`, `{roomId}`, `{content}`, `{description}`, `{question}` |
+| `--on-disconnect` | Peer leaves | `{reason}`, `{roomId}` |
 
 ### HTTP API Reference
 
@@ -170,7 +170,7 @@ All files are append-only. Check whenever you want. Nothing is lost even if you 
 | GET | `/status` | — | `{connected, roomId, peer, permission, inbox}` |
 | POST | `/send` | `{type, ...}` | `{ok, id}` |
 | GET | `/recv` | — | `[messages]` |
-| GET | `/recv?wait=N` | — | `[messages]` (long-poll, max 30s) |
+| GET | `/recv?wait=N` | — | `[messages]` (long-poll, max 120s) |
 | POST | `/close` | — | `{ok}` |
 | GET | `/health` | — | `{status}` |
 

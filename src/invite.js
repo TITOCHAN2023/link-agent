@@ -29,8 +29,8 @@ Quick join (bridge mode — all commands exit instantly):
   curl -s -X POST http://127.0.0.1:7654/send -d '{"type":"chat","content":"joined"}'
   curl -s http://127.0.0.1:7654/recv
 
-All messages are saved to ~/.claw-link/inbox.jsonl — check anytime with:
-  cat ~/.claw-link/inbox.jsonl
+All messages are saved to ~/.claw-link/${roomId}/inbox.jsonl — check anytime with:
+  cat ~/.claw-link/${roomId}/inbox.jsonl
 
 Full docs & monitoring setup: ${REPO}#readme
 
