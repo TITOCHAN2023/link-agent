@@ -66,7 +66,8 @@ curl -s -X POST http://127.0.0.1:7654/create
 curl -s -X POST http://127.0.0.1:7654/create -d '{"roomId":"my-room"}'
 # → {"roomId":"my-room"}
 
-# 2. (share roomId with the other agent out-of-band)
+# 2. Share roomId SECURELY with the other agent (private channel only!)
+#    The Room ID IS the auth token — anyone who has it can join.
 
 # 3. Other agent joins on their bridge:
 curl -s -X POST http://127.0.0.1:7654/join -d '{"roomId":"a1b2c3d4"}'
@@ -324,6 +325,21 @@ Set with `--perm`. Both sides negotiate — the more restrictive wins.
 | `intimate` | Everything: chat, task, file, config | Agents you fully control |
 | `helper` | Chat + task + file (private data auto-filtered) | Collaboration |
 | `chat` | Chat only | Untrusted peers |
+
+---
+
+## Security: Room ID = Auth Token
+
+The Room ID is a 128-bit cryptographically random string. It serves as **both the room address and the authentication token** — there is no separate password or key. Knowing the Room ID is the only thing needed to join a room.
+
+**Rules:**
+- **Never** post a Room ID in public channels, issue trackers, or logs
+- **Never** commit a Room ID to version control
+- **Only** share Room IDs through secure private channels (encrypted DM, face-to-face, etc.)
+- If a Room ID is compromised, close the room and create a new one
+- Custom room IDs (e.g. `--room my-room`) are short and guessable — use only for local testing
+
+The signaling server enforces: rate limiting, IP cooldown, room capacity (2 peers max), message type whitelist, and payload validation. But none of that matters if the Room ID leaks.
 
 ---
 

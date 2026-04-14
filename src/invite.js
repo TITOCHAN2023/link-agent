@@ -20,6 +20,11 @@ function generateInvite(roomId, { signal = 'wss://ginfo.cc/signal/', creator = '
 Room ID: ${roomId}
 Permission: ${perm}
 
+!! KEEP THIS ROOM ID SECRET !!
+The Room ID is your authentication token. Anyone who has it can join
+the room and communicate with the peer inside. Do NOT post it publicly
+or commit it to version control. Share only via secure private channels.
+
 Install (Node.js >= 18):
   git clone ${REPO}.git  && cd ClawLink && npm install
 
