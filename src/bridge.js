@@ -228,13 +228,14 @@ class ClawBridge {
       room.peerName = peer;
       room.negotiatedPerm = perm;
       room.reconnecting = false;
+      const isFirstConnect = room.reconnectAttempt === 0;
       room.reconnectAttempt = 0;
       this._log(`[${room.roomId}] Connected to ${peer} (${perm})`);
       room.appendEvent({ event: 'connected', peer, permission: perm });
       this._runHook('connect', { peer, permission: perm, roomId: room.roomId });
       this._tgNotify('connected', { roomId: room.roomId, peer, permission: perm });
-      // Auto-introduce on first connect (not reconnect)
-      if (this.intro && room.reconnectAttempt === 0) {
+      // Auto-introduce on first connect only (not reconnect)
+      if (this.intro && isFirstConnect) {
         try {
           room.transport.send({ type: 'intro', from: this.name, text: this.intro, id: crypto.randomBytes(4).toString('hex'), ts: Date.now() });
         } catch {}
@@ -418,14 +419,22 @@ class ClawBridge {
       if (method === 'POST' && pathname === '/create') {
         const body = await this._readBody(req);
         const resolvedRoom = this._resolveAlias(body.roomId);
-        const room = this._initRoom(resolvedRoom || '_pending_' + Date.now());
+        const pendingKey = resolvedRoom || '_pending_' + Date.now();
+        const room = this._initRoom(pendingKey);
         this._connectRoom(room, resolvedRoom || null);
         // Wait for signaling to assign room ID
-        await this._waitFor(() => room.transport && room.transport.roomId, 10000);
+        try {
+          await this._waitFor(() => room.transport && room.transport.roomId, 10000);
+        } catch {
+          // Timeout — clean up the dangling room
+          this._destroyRoom(room);
+          this.rooms.delete(pendingKey);
+          return this._json(res, 504, { error: 'Signaling timeout' });
+        }
         const actualId = room.transport.roomId;
         // Re-register under actual room ID if it was auto-generated
         if (!body.roomId && actualId) {
-          this.rooms.delete(room.roomId);
+          this.rooms.delete(pendingKey);
           room.roomId = actualId;
           room.dataDir = path.join(this._baseDir, actualId);
           fs.mkdirSync(room.dataDir, { recursive: true });
@@ -563,7 +572,7 @@ class ClawBridge {
   _buildEnvelope(body) {
     if (body.id) return body;
     switch (body.type) {
-      case 'chat':   return proto.chat(body.content || '', this.name);
+      case 'chat':   return proto.chat(body.content || body.text || '', this.name);
       case 'task':   return proto.task(body.description || '', body.data || null, this.name);
       case 'result': return proto.result(body.data || null, this.name, body.replyTo);
       case 'file':   return proto.file(body.name || '', body.content || '', this.name);
@@ -629,7 +638,8 @@ class ClawBridge {
     if (!cmd) return;
     let expanded = cmd;
     for (const [k, v] of Object.entries(data)) {
-      expanded = expanded.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v));
+      const safe = "'" + String(v).replace(/'/g, "'\\''") + "'";
+      expanded = expanded.replace(new RegExp(`\\{${k}\\}`, 'g'), safe);
     }
     execFile('/bin/sh', ['-c', expanded], { timeout: 10000 }, (err) => {
       if (err) this._log(`Hook '${event}' failed: ${err.message}`);

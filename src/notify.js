@@ -76,6 +76,11 @@ class FileAdapter {
   }
 }
 
+/** Escape a value for safe interpolation into a shell command. */
+function shellEscape(s) {
+  return "'" + String(s).replace(/'/g, "'\\''") + "'";
+}
+
 class ShellAdapter {
   constructor({ command }) {
     this._cmd = command;
@@ -85,7 +90,7 @@ class ShellAdapter {
     let expanded = this._cmd;
     for (const [k, v] of Object.entries(payload)) {
       if (typeof v === 'string' || typeof v === 'number') {
-        expanded = expanded.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v));
+        expanded = expanded.replace(new RegExp(`\\{${k}\\}`, 'g'), shellEscape(v));
       }
     }
     execFile('/bin/sh', ['-c', expanded], { timeout: 10000 }, () => {});

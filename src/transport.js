@@ -3,6 +3,7 @@
 const { EventEmitter } = require('events');
 const nodeDataChannel = require('node-datachannel');
 const WebSocket = require('ws');
+const { negotiate } = require('./permissions');
 
 const MAX_DC_MSG = 256 * 1024; // 256 KB cap on DataChannel messages
 
@@ -243,7 +244,6 @@ class ClawTransport extends EventEmitter {
   _onData(data) {
     switch (data.type) {
       case 'handshake': {
-        const { negotiate } = require('./permissions');
         const negotiated = negotiate(this.requestedPermission, data.requestedPermission);
         this.negotiatedPermission = negotiated;
         this.peerName = data.name;
@@ -259,7 +259,6 @@ class ClawTransport extends EventEmitter {
       }
       case 'handshake-ack': {
         // Never trust peer's claimed negotiatedPermission — compute locally
-        const { negotiate } = require('./permissions');
         const verified = negotiate(this.requestedPermission, data.requestedPermission);
         this.negotiatedPermission = verified;
         this.peerName = data.name;

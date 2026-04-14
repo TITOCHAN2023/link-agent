@@ -11,10 +11,13 @@ const API = 'https://api.telegram.org/bot';
  * A polling loop listens for /kill <roomId> commands.
  */
 class TelegramNotifier {
-  constructor({ token, chatId, onKill }) {
+  constructor({ token, chatId, onKill, onSetPerm, onStatus, onRooms }) {
     this.token = token;
     this.chatId = chatId;
-    this.onKill = onKill;   // (roomId) => void — called when user sends /kill
+    this.onKill = onKill;         // (roomId) => void
+    this.onSetPerm = onSetPerm;   // (roomId, level) => void
+    this.onStatus = onStatus;     // () => void
+    this.onRooms = onRooms;       // () => void
     this._offset = 0;
     this._polling = false;
     this._timer = null;
