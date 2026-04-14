@@ -19,12 +19,14 @@ Security:
   - IP cooldown: 3s between reconnects
   - Room ID validation: alphanumeric + hyphen/underscore, max 32 chars
   - Payload validation (SDP format, ICE fields)
-  - Stale room auto-cleanup (1 hour TTL, 2 hour hard limit)
+  - Stale room auto-cleanup (60s empty TTL, 2 hour hard limit)
+  - Per-IP connection limit and room creation limit
+  - Trusted proxy whitelist for X-Forwarded-For
   - /health HTTP endpoint
 
-Nginx or other reverse proxy NEED TO CONFIGURE:                                                                                                                                                                   
-  proxy_set_header X-Real-IP $remote_addr;                                                                                                                              
-  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;    
+Nginx or other reverse proxy NEED TO CONFIGURE:
+  proxy_set_header X-Real-IP $remote_addr;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 """
 
 import asyncio
@@ -51,13 +53,24 @@ PING_TIMEOUT = 10
 MAX_MSG_SIZE = 65536
 MAX_PEERS_PER_ROOM = 2
 MAX_ROOMS = 100
-RATE_LIMIT = 30
-COOLDOWN_SEC = 3
-ROOM_TTL_SEC = 3600
-ROOM_HARD_TTL_SEC = 7200  # Absolute max age, even if room has peers
+RATE_LIMIT = 30                # messages per second per IP
+COOLDOWN_SEC = 3               # seconds between reconnects from same IP
+ROOM_EMPTY_TTL_SEC = 60        # empty rooms cleaned after 60s (not 1 hour)
+ROOM_HARD_TTL_SEC = 7200       # absolute max age, even if room has peers
+MAX_CONNS_PER_IP = 6           # max concurrent WebSocket connections per IP
+MAX_ROOMS_PER_IP = 5           # max rooms created by a single IP (prevent exhaustion)
+ROOM_ID_BYTES = 16             # 16 bytes = 32 hex chars = 2^128 (room ID IS the auth token)
 
 ALLOWED_TYPES = frozenset({"offer", "answer", "ice"})
 ROOM_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,32}$")
+
+# Trusted reverse proxy IPs — ONLY these are allowed to set X-Forwarded-For / X-Real-IP.
+# Direct connections from other IPs will have their headers IGNORED.
+# Add your proxy IPs here, or set SIGNAL_TRUSTED_PROXIES env var (comma-separated).
+_trusted_env = os.getenv("SIGNAL_TRUSTED_PROXIES", "127.0.0.1,::1")
+TRUSTED_PROXIES: frozenset[str] = frozenset(
+    ip.strip() for ip in _trusted_env.split(",") if ip.strip()
+)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -76,43 +89,56 @@ def _sanitize_log(s: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Real IP extraction (nginx proxy aware)
+# Real IP extraction (nginx proxy aware, spoof-resistant)
 # ---------------------------------------------------------------------------
 def _get_real_ip(ws: ServerConnection) -> str:
-    """Extract the real client IP, respecting X-Forwarded-For / X-Real-IP
-    headers set by a trusted reverse proxy (nginx).
+    """Extract the real client IP.
 
-    Falls back to ws.remote_address for direct connections.
+    Only trusts X-Real-IP / X-Forwarded-For when the TCP-level peer is in
+    TRUSTED_PROXIES. When reading X-Forwarded-For, takes the RIGHTMOST
+    non-trusted IP (the last hop before entering our trust boundary),
+    NOT the leftmost (which the client controls).
     """
+    socket_ip = ws.remote_address[0]
+
+    # If not from a trusted proxy, ignore all headers — use TCP peer IP
+    if socket_ip not in TRUSTED_PROXIES:
+        return socket_ip
+
     headers = ws.request.headers if ws.request else {}
 
-    # X-Real-IP is set by nginx, single IP, most reliable
+    # X-Real-IP: set by nginx to $remote_addr, most reliable
     real_ip = headers.get("X-Real-IP")
     if real_ip:
-        return real_ip.strip()
+        cleaned = real_ip.strip()
+        if cleaned:
+            return cleaned
 
-    # X-Forwarded-For: client, proxy1, proxy2 — take the first (leftmost)
+    # X-Forwarded-For: client, proxy1, proxy2
+    # Walk from right, skip trusted proxies, return first untrusted IP
     xff = headers.get("X-Forwarded-For")
     if xff:
-        first = xff.split(",")[0].strip()
-        if first:
-            return first
+        parts = [p.strip() for p in xff.split(",") if p.strip()]
+        for ip in reversed(parts):
+            if ip not in TRUSTED_PROXIES:
+                return ip
 
-    return ws.remote_address[0]
+    return socket_ip
 
 
 # ---------------------------------------------------------------------------
 # Room
 # ---------------------------------------------------------------------------
 class Room:
-    __slots__ = ("room_id", "peers", "lock", "last_active", "created_at")
+    __slots__ = ("room_id", "peers", "lock", "last_active", "created_at", "creator_ip")
 
-    def __init__(self, room_id: str):
+    def __init__(self, room_id: str, creator_ip: str = ""):
         self.room_id = room_id
         self.peers: list[ServerConnection] = []
         self.lock = asyncio.Lock()
         self.last_active = time.monotonic()
         self.created_at = time.monotonic()
+        self.creator_ip = creator_ip
 
     def touch(self):
         self.last_active = time.monotonic()
@@ -136,7 +162,9 @@ class SignalingServer:
         self.rooms: dict[str, Room] = {}
         self.global_lock = asyncio.Lock()
         self._recent_ips: dict[str, float] = {}
-        self._rate_tracks: dict[str, deque] = {}  # keyed by real IP
+        self._rate_tracks: dict[str, deque] = {}   # keyed by real IP
+        self._conn_counts: dict[str, int] = {}     # active connections per IP
+        self._room_counts: dict[str, int] = {}     # rooms created per IP (reset on cleanup)
 
     # -- helpers ------------------------------------------------------------
 
@@ -164,6 +192,21 @@ class SignalingServer:
             return False
         bucket.append(now)
         return True
+
+    def _conn_add(self, ip: str) -> bool:
+        """Track connection. Returns False if over limit."""
+        count = self._conn_counts.get(ip, 0)
+        if count >= MAX_CONNS_PER_IP:
+            return False
+        self._conn_counts[ip] = count + 1
+        return True
+
+    def _conn_remove(self, ip: str) -> None:
+        count = self._conn_counts.get(ip, 0)
+        if count <= 1:
+            self._conn_counts.pop(ip, None)
+        else:
+            self._conn_counts[ip] = count - 1
 
     @staticmethod
     def _validate_payload(msg_type: str, payload) -> tuple[bool, str]:
@@ -198,39 +241,58 @@ class SignalingServer:
             parts = parts[1:]
         return parts[0] if parts else None
 
-    async def _get_or_create_room(self, room_id: str | None) -> tuple[Room | None, str]:
-        """Returns (room, room_id). room is None only if at capacity."""
+    async def _get_or_create_room(self, room_id: str | None, ip: str) -> tuple[Room | None, str, str]:
+        """Returns (room, room_id, error). room is None on failure."""
         async with self.global_lock:
-            if len(self.rooms) >= MAX_ROOMS and (room_id is None or room_id not in self.rooms):
-                return None, room_id or ""
-            # Use provided ID or generate one
-            rid = room_id or secrets.token_hex(4)
-            if rid not in self.rooms:
-                self.rooms[rid] = Room(rid)
-                log.info("Room '%s' created (%d total)", _sanitize_log(rid), len(self.rooms))
-            return self.rooms[rid], rid
+            # Joining existing room — no capacity check needed
+            if room_id and room_id in self.rooms:
+                return self.rooms[room_id], room_id, ""
+
+            # Creating new room — check limits
+            if len(self.rooms) >= MAX_ROOMS:
+                return None, room_id or "", "Server at capacity"
+
+            # Per-IP room creation limit
+            ip_rooms = self._room_counts.get(ip, 0)
+            if ip_rooms >= MAX_ROOMS_PER_IP:
+                return None, room_id or "", "Too many rooms from your IP"
+
+            rid = room_id or secrets.token_hex(ROOM_ID_BYTES)
+            self.rooms[rid] = Room(rid, creator_ip=ip)
+            self._room_counts[ip] = ip_rooms + 1
+            log.info("Room '%s' created by %s (%d total)", _sanitize_log(rid), ip, len(self.rooms))
+            return self.rooms[rid], rid, ""
 
     async def _cleanup_stale_rooms(self):
         while True:
-            await asyncio.sleep(60)
+            await asyncio.sleep(30)
             now = time.monotonic()
             stale = []
             to_close: list[ServerConnection] = []
+            ips_to_decrement: list[str] = []
             async with self.global_lock:
                 for rid, room in self.rooms.items():
                     idle = now - room.last_active
                     age = now - room.created_at
-                    # Empty + idle beyond TTL → stale
-                    if room.empty and idle > ROOM_TTL_SEC:
+                    # Empty + idle beyond short TTL → stale
+                    if room.empty and idle > ROOM_EMPTY_TTL_SEC:
                         stale.append(rid)
-                    # Any room beyond hard TTL → force close (prevent zombie rooms)
+                        ips_to_decrement.append(room.creator_ip)
+                    # Any room beyond hard TTL → force close
                     elif age > ROOM_HARD_TTL_SEC:
                         stale.append(rid)
+                        ips_to_decrement.append(room.creator_ip)
                         to_close.extend(room.peers)
                 for rid in stale:
                     del self.rooms[rid]
+                # Decrement per-IP room counts
+                for ip in ips_to_decrement:
+                    if ip in self._room_counts:
+                        self._room_counts[ip] -= 1
+                        if self._room_counts[ip] <= 0:
+                            del self._room_counts[ip]
             if stale:
-                log.info("Cleaned %d stale room(s)", len(stale))
+                log.info("Cleaned %d stale room(s): %s", len(stale), ", ".join(stale))
             # Close zombie connections outside the lock
             for ws in to_close:
                 try:
@@ -242,7 +304,7 @@ class SignalingServer:
             expired_ips = [ip for ip, t in self._recent_ips.items() if t < cutoff]
             for ip in expired_ips:
                 del self._recent_ips[ip]
-            # Clean old rate-limit buckets (no activity for 10s)
+            # Clean old rate-limit buckets
             expired_rates = [ip for ip, bkt in self._rate_tracks.items() if not bkt or now - bkt[-1] > 10]
             for ip in expired_rates:
                 del self._rate_tracks[ip]
@@ -255,12 +317,26 @@ class SignalingServer:
         safe_path = _sanitize_log(path)
 
         parsed_id = self._parse_room_id(path)
+
+        # --- gate: per-IP connection limit ---
+        if not self._conn_add(ip):
+            log.warning("REJECT %s: too many connections (%d)", ip, MAX_CONNS_PER_IP)
+            await self._send(ws, {"type": "error", "payload": "Too many connections"})
+            await ws.close(1008, "Too many connections")
+            return
+
+        try:
+            await self._handle_session(ws, ip, safe_path, parsed_id)
+        finally:
+            self._conn_remove(ip)
+
+    async def _handle_session(self, ws: ServerConnection, ip: str, safe_path: str, parsed_id: str | None) -> None:
         log.info("Connection from %s path='%s' room=%s", ip, safe_path, _sanitize_log(parsed_id or "(auto)"))
 
         # Validate room ID format
         if parsed_id is not None and not ROOM_ID_RE.match(parsed_id):
-            log.warning("REJECT invalid room ID '%s' from %s", _sanitize_log(parsed_id), ip)
-            await self._send(ws, {"type": "error", "payload": "Invalid roomId: only alphanumeric, hyphen and underscore allowed (max 32 chars)"})
+            log.warning("REJECT invalid room ID from %s", ip)
+            await self._send(ws, {"type": "error", "payload": "Invalid roomId"})
             await ws.close(1008, "Invalid roomId")
             return
 
@@ -273,12 +349,11 @@ class SignalingServer:
             return
 
         # Get/create room
-        room, room_id = await self._get_or_create_room(parsed_id)
+        room, room_id, err = await self._get_or_create_room(parsed_id, ip)
         if room is None:
-            msg = "Server at capacity"
-            log.warning("REJECT %s: %s", ip, msg)
-            await self._send(ws, {"type": "error", "payload": msg})
-            await ws.close(1008, msg)
+            log.warning("REJECT %s: %s", ip, err)
+            await self._send(ws, {"type": "error", "payload": err})
+            await ws.close(1008, err)
             return
 
         # Join room
@@ -292,7 +367,7 @@ class SignalingServer:
             room.touch()
             peer_index = len(room.peers)
 
-        # Role assignment — always include roomId
+        # Role assignment
         if peer_index == 1:
             await self._send(ws, {
                 "type": "ready",
@@ -321,8 +396,8 @@ class SignalingServer:
 
                 msg_type = msg.get("type")
                 if msg_type not in ALLOWED_TYPES:
-                    log.warning("[%s] REJECT type '%s' from %s", room_id, _sanitize_log(str(msg_type)), ip)
-                    await self._send(ws, {"type": "error", "payload": f"Type '{msg_type}' not allowed"})
+                    # Don't reflect user input in error messages
+                    await self._send(ws, {"type": "error", "payload": "Message type not allowed"})
                     continue
                 if not self._check_rate(ip):
                     continue
@@ -346,8 +421,6 @@ class SignalingServer:
             async with room.lock:
                 if ws in room.peers:
                     room.peers.remove(ws)
-                # Notify remaining peer — but do NOT clear them from the room.
-                # They stay tracked so they can be paired with a reconnecting peer.
                 for p in room.peers:
                     await self._send(p, {"type": "peer-left"})
 
@@ -388,8 +461,11 @@ class SignalingServer:
             process_request=self._health_check,
         ) as server:
             log.info("Signaling server on ws://%s:%s", HOST, PORT)
-            log.info("Max rooms: %d | Rate: %d msg/s | Cooldown: %ds | TTL: %ds | Hard TTL: %ds",
-                     MAX_ROOMS, RATE_LIMIT, COOLDOWN_SEC, ROOM_TTL_SEC, ROOM_HARD_TTL_SEC)
+            log.info("Trusted proxies: %s", ", ".join(TRUSTED_PROXIES) or "(none)")
+            log.info("Limits: rooms=%d | rate=%d/s | cooldown=%ds | conns/ip=%d | rooms/ip=%d",
+                     MAX_ROOMS, RATE_LIMIT, COOLDOWN_SEC, MAX_CONNS_PER_IP, MAX_ROOMS_PER_IP)
+            log.info("TTL: empty=%ds | hard=%ds | Room ID entropy: %d bytes",
+                     ROOM_EMPTY_TTL_SEC, ROOM_HARD_TTL_SEC, ROOM_ID_BYTES)
             await stop_event.wait()
 
         cleanup_task.cancel()
