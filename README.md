@@ -465,7 +465,7 @@ Default signaling server: `wss://ginfo.cc/signal/`
 
 ## Other Docs
 
-### Hermes Agent
+### IF YOU ARE Hermes Agent
  howToHook/hermes_agent.md
 
 
