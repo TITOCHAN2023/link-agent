@@ -193,6 +193,7 @@ class ClawBridge {
     room.peerName = null;
     room.negotiatedPerm = null;
     room.stopped = false;
+    this._clearTimers(room);
 
     room.transport = new ClawTransport({
       signalingUrl: this.signalingUrl,
@@ -201,12 +202,26 @@ class ClawBridge {
       room: targetRoomId,
     });
 
+    // Connection timeout: if peer doesn't show up in 60s, force reconnect
+    room._connectTimeout = setTimeout(() => {
+      if (room.stopped || (room.transport && room.transport.connected)) return;
+      this._log(`[${room.roomId}] Connection timeout (60s) — retrying`);
+      room.appendEvent({ event: 'timeout' });
+      if (room.transport) {
+        room.transport.removeAllListeners();
+        room.transport.close();
+        room.transport = null;
+      }
+      this._autoReconnect(room);
+    }, 60000);
+
     room.transport.on('room', (id) => {
       room.appendEvent({ event: 'room', roomId: id });
       this._tgNotify('room', { roomId: id });
     });
 
     room.transport.on('connected', (peer, perm) => {
+      this._clearTimers(room);
       room.peerName = peer;
       room.negotiatedPerm = perm;
       room.reconnecting = false;
@@ -217,31 +232,39 @@ class ClawBridge {
       this._tgNotify('connected', { roomId: room.roomId, peer, permission: perm });
       // Replay pending (unACKed) messages after reconnect
       this._replayPending(room);
+      // Start heartbeat
+      this._startHeartbeat(room);
     });
 
     room.transport.on('message', (msg) => {
+      // Internal: handle heartbeat pong silently
+      if (msg.type === '_ping' || msg.type === '_pong') {
+        if (msg.type === '_ping') {
+          try { room.transport.send({ type: '_pong', ts: Date.now() }); } catch {}
+        }
+        room._lastPeerActivity = Date.now();
+        return;
+      }
       // Handle ACK: remove from pending, don't deliver to user
       if (msg.type === 'ack' && msg.replyTo) {
         room.ackReceived(msg.replyTo);
-        this._log(`[${room.roomId}] ACK for ${msg.replyTo}`);
+        room._lastPeerActivity = Date.now();
         return;
       }
       // Dedup: skip if we've already seen this message ID
       if (msg.id && room.seenIds.has(msg.id)) {
-        this._log(`[${room.roomId}] Dedup skip ${msg.id}`);
-        // Still send ACK back for retransmitted messages
         this._sendAck(room, msg.id);
         return;
       }
       if (msg.id) {
         room.seenIds.add(msg.id);
-        // Cap seen set at 1000 to avoid unbounded growth
         if (room.seenIds.size > 1000) {
           const first = room.seenIds.values().next().value;
           room.seenIds.delete(first);
         }
       }
 
+      room._lastPeerActivity = Date.now();
       room.appendInbox(msg);
       room.msgCount++;
       room.unread.push(msg);
@@ -262,11 +285,11 @@ class ClawBridge {
         tgData.data = msg.payload.data;
       }
       this._tgNotify('message', tgData);
-      // Auto-ACK back to sender
       this._sendAck(room, msg.id);
     });
 
     room.transport.on('disconnected', (reason) => {
+      this._clearTimers(room);
       this._log(`[${room.roomId}] Disconnected: ${reason}`);
       if (room.peerName) {
         this._runHook('disconnect', { reason, roomId: room.roomId });
@@ -284,10 +307,39 @@ class ClawBridge {
     room.transport.connect();
   }
 
+  _clearTimers(room) {
+    if (room._connectTimeout) { clearTimeout(room._connectTimeout); room._connectTimeout = null; }
+    if (room._heartbeatTimer) { clearInterval(room._heartbeatTimer); room._heartbeatTimer = null; }
+  }
+
+  _startHeartbeat(room) {
+    room._lastPeerActivity = Date.now();
+    room._heartbeatTimer = setInterval(() => {
+      if (room.stopped || !room.transport) { this._clearTimers(room); return; }
+      // Send ping
+      try { room.transport.send({ type: '_ping', ts: Date.now() }); } catch {}
+      // Check if peer has been silent too long (90s = 3 missed beats)
+      const silence = Date.now() - (room._lastPeerActivity || 0);
+      if (silence > 90000) {
+        this._log(`[${room.roomId}] Peer silent for ${Math.round(silence / 1000)}s — forcing reconnect`);
+        this._clearTimers(room);
+        if (room.transport) {
+          room.transport.removeAllListeners();
+          room.transport.close();
+          room.transport = null;
+        }
+        room.peerName = null;
+        room.appendEvent({ event: 'disconnected', reason: 'heartbeat-timeout' });
+        this._autoReconnect(room);
+      }
+    }, 30000);
+  }
+
   _destroyRoom(room) {
     room.stopped = true;
     room.reconnecting = false;
     if (room.reconnectTimer) clearTimeout(room.reconnectTimer);
+    this._clearTimers(room);
     if (room.transport) {
       room.transport.removeAllListeners();
       room.transport.close();
@@ -416,6 +468,9 @@ class ClawBridge {
           unread: room.unread.length,
           total: room.msgCount,
           pending: room.pending.size,
+          lastActivity: room._lastPeerActivity || null,
+          silenceSec: room._lastPeerActivity ? Math.round((Date.now() - room._lastPeerActivity) / 1000) : null,
+          reconnectAttempt: room.reconnectAttempt,
           inbox: room.inboxPath,
         });
       }
