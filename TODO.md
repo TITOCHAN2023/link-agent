@@ -56,10 +56,12 @@ index.js          — require('claw-link') 入口
 
 ## 待开发功能
 
-- [ ] .clawlinkrc 配置文件（name/perm/port/tg-token 等常用参数，不用每次传）
+- [x] .clawlinkrc 配置文件（name/perm/port/tg-token/aliases 等，CLI/bridge 全部支持）✅
 - [ ] README 补充自动重连行为说明（backoff 策略、何时重连、何时放弃）
-- [ ] README 更新所有 inbox 路径为 per-room 格式
+- [x] README 更新所有 inbox 路径为 per-room 格式 ✅
 - [ ] Bridge /send 支持 result 类型的 replyTo 自动关联
+- [ ] ACK 确认 + 离线消息重发（pending 队列持久化，重连后批量重发，接收方去重）
+- [ ] hook payload 加 webhookUrl 支持（张铁建议）
 
 ## 测试验证记录
 

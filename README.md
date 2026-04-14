@@ -161,6 +161,29 @@ All files are append-only. Check whenever you want. Nothing is lost even if you 
 | `--on-message` | Message arrives | `{from}`, `{type}`, `{id}`, `{roomId}`, `{content}`, `{description}`, `{question}` |
 | `--on-disconnect` | Peer leaves | `{reason}`, `{roomId}` |
 
+### Auto-Reconnect
+
+When a peer disconnects, the bridge automatically reconnects to the same room:
+
+- **Backoff**: 5s → 10s → 20s → 30s (cap), exponential
+- **Retries**: unlimited until `/close` or TG `/kill`
+- **Message safety**: with ACK enabled, unconfirmed messages are replayed after reconnect
+- **Room ID**: stays the same — inbox path never drifts
+
+To stop reconnection: `curl -s -X POST http://127.0.0.1:7654/close -d '{"roomId":"..."}'`
+
+### ACK & Offline Retry
+
+The bridge tracks outbound message delivery:
+
+1. Every sent message enters a **pending queue** (persisted to `pending.jsonl`)
+2. The receiving bridge sends back an **ACK** automatically
+3. On ACK receipt, the message leaves the pending queue
+4. On reconnect, all pending messages are **replayed**
+5. The receiver **deduplicates** by message ID — no double delivery
+
+Check pending count: `curl -s http://127.0.0.1:7654/status` → `{"pending": 0, ...}`
+
 ### HTTP API Reference
 
 | Method | Path | Body | Returns |
