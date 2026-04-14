@@ -7,6 +7,7 @@ const protocol = require('./src/protocol');
 const permissions = require('./src/permissions');
 const { SessionManager } = require('./src/session');
 const { loadRC, resolveAlias } = require('./src/rc');
+const { Notifier } = require('./src/notify');
 
 module.exports = {
   ClawTransport,
@@ -17,6 +18,7 @@ module.exports = {
   SessionManager,
   loadRC,
   resolveAlias,
+  Notifier,
   DEFAULT_SIGNALING,
   STUN_SERVERS,
 };

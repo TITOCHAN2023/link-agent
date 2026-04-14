@@ -132,6 +132,7 @@ const bridgeCmd = program
       tgToken: opts.tgToken,
       tgChatId: opts.tgChat,
       aliases: rc.aliases,
+      notify: rc.notify,
     };
 
     // ── If this is the daemon child, run the bridge ──

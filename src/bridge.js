@@ -8,6 +8,7 @@ const { ClawTransport } = require('./transport');
 const proto = require('./protocol');
 const { generateInvite, writeInvite } = require('./invite');
 const { TelegramNotifier } = require('./tg');
+const { Notifier } = require('./notify');
 
 /**
  * Per-room state. Each room has its own transport, inbox, message queue.
@@ -123,6 +124,7 @@ class ClawBridge {
     tgToken,
     tgChatId,
     aliases,
+    notify,
   } = {}) {
     this.port = port;
     this.signalingUrl = signalingUrl;
@@ -132,6 +134,7 @@ class ClawBridge {
 
     this.hooks = { connect: onConnect, message: onMessage, disconnect: onDisconnect };
     this._baseDir = dataDir || path.join(process.env.HOME || '/tmp', '.claw-link');
+    this._notifier = new Notifier(notify || null);
 
     // Multi-room state
     this.rooms = new Map();
@@ -567,6 +570,7 @@ class ClawBridge {
 
   _tgNotify(event, data) {
     if (this._tg) this._tg.notify(event, data).catch(() => {});
+    this._notifier.notify(event, data);
   }
 
   // -- helpers -------------------------------------------------------------
