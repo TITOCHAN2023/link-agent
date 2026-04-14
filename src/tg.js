@@ -61,7 +61,7 @@ class TelegramNotifier {
           case 'text':
             return `💬 ${room} <b>${from}</b>: ${esc(d.text || d.content || '')}`;
           case 'chat':
-            return `💬 ${room} <b>${from}</b>: ${esc(d.content || '')}`;
+            return `💬 ${room} <b>${from}</b>: ${esc(d.content || d.text || '')}`;
           case 'task':
             return `📋 ${room} <b>${from}</b> task: ${esc(d.description || '')}`;
           case 'query':
@@ -71,7 +71,7 @@ class TelegramNotifier {
           case 'file':
             return `📎 ${room} <b>${from}</b> sent file: ${esc(d.name || '?')}`;
           default:
-            return `📨 ${room} <b>${from}</b> [${d.type}]`;
+            return `📨 ${room} <b>${from}</b> [${d.type}]: ${esc(d.text || d.content || d.description || '')}`;
         }
       }
 

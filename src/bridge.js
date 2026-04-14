@@ -509,6 +509,8 @@ class ClawBridge {
           tgOut.text = tgOut.text || envelope.payload.text;
           tgOut.description = envelope.payload.description;
           tgOut.question = envelope.payload.question;
+          tgOut.name = envelope.payload.name;
+          tgOut.data = envelope.payload.data;
         }
         this._tgNotify('message', tgOut);
         return this._json(res, 200, { ok: true, id: envelope.id, roomId: room.roomId });
