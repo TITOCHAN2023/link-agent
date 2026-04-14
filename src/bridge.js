@@ -10,31 +10,60 @@ const { generateInvite, writeInvite } = require('./invite');
 const { TelegramNotifier } = require('./tg');
 
 /**
- * ClawBridge — local HTTP bridge for serial / low-capability agents.
+ * Per-room state. Each room has its own transport, inbox, message queue.
+ */
+class RoomState {
+  constructor(roomId, dataDir) {
+    this.roomId = roomId;
+    this.transport = null;
+    this.peerName = null;
+    this.negotiatedPerm = null;
+    this.stopped = false;
+    this.reconnecting = false;
+    this.reconnectAttempt = 0;
+    this.reconnectTimer = null;
+
+    // Per-room persistence
+    this.dataDir = path.join(dataDir, roomId);
+    fs.mkdirSync(this.dataDir, { recursive: true });
+    this.inboxPath = path.join(this.dataDir, 'inbox.jsonl');
+    this.eventsPath = path.join(this.dataDir, 'events.jsonl');
+
+    // Message queue
+    this.unread = [];
+    this.waiters = [];
+    this.msgCount = 0;
+  }
+
+  appendInbox(msg) {
+    fs.appendFileSync(this.inboxPath, JSON.stringify(msg) + '\n');
+  }
+
+  appendEvent(data) {
+    fs.appendFileSync(this.eventsPath, JSON.stringify({ ts: Date.now(), ...data }) + '\n');
+  }
+
+  readAllInbox() {
+    try {
+      const c = fs.readFileSync(this.inboxPath, 'utf8').trim();
+      if (!c) return [];
+      return c.split('\n').map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+    } catch { return []; }
+  }
+}
+
+/**
+ * ClawBridge — multi-room HTTP bridge for serial agents.
  *
- * Core guarantee: **messages are persisted to disk, never lost.**
- *
- * The bridge maintains two JSONL files:
- *   inbox.jsonl   — every incoming message, append-only
- *   events.jsonl  — connection events (connect/disconnect/room)
- *
- * A serial agent does NOT need to poll /recv or listen to hooks.
- * It can simply `cat inbox.jsonl` whenever it has time.
- * New messages since last check = new lines in the file.
- *
- * Hooks are an optional optimization — they notify faster, but
- * even without them, no message is ever lost.
- *
- * HTTP API:
- *   POST /create                → create room
- *   POST /join    {roomId}      → join room
- *   GET  /status                → connection state
- *   POST /send    {type, ...}   → send message
- *   GET  /recv                  → unread messages (marks as read)
- *   GET  /recv?wait=N           → long-poll
- *   GET  /recv?all=1            → all messages (re-read inbox file)
- *   POST /close                 → disconnect
- *   GET  /health                → liveness check
+ * HTTP API (all endpoints accept roomId to target a specific room):
+ *   POST /create  {roomId?}             → create room
+ *   POST /join    {roomId}              → join room
+ *   POST /send    {roomId, type, ...}   → send message
+ *   GET  /recv?room=X&wait=N           → poll messages
+ *   GET  /status?room=X                → room status (omit room for all)
+ *   POST /close   {roomId}             → close room
+ *   GET  /rooms                         → list all rooms
+ *   GET  /health                        → liveness
  */
 class ClawBridge {
   constructor({
@@ -42,12 +71,12 @@ class ClawBridge {
     signalingUrl = 'wss://ginfo.cc/signal/',
     name = 'Claw',
     permission = 'helper',
-    dataDir,           // directory for inbox/events files (default: ~/.claw-link/)
+    dataDir,
     onConnect,
     onMessage,
     onDisconnect,
-    tgToken,           // Telegram bot token (optional)
-    tgChatId,          // Telegram chat ID (optional)
+    tgToken,
+    tgChatId,
   } = {}) {
     this.port = port;
     this.signalingUrl = signalingUrl;
@@ -55,9 +84,12 @@ class ClawBridge {
     this.permission = permission;
 
     this.hooks = { connect: onConnect, message: onMessage, disconnect: onDisconnect };
+    this._baseDir = dataDir || path.join(process.env.HOME || '/tmp', '.claw-link');
 
-    // Telegram bot (optional — user monitoring, agent doesn't see this)
-    // Falls back to env: CLAWLINK_TG_TOKEN, CLAWLINK_TG_CHAT
+    // Multi-room state
+    this.rooms = new Map();
+
+    // Telegram
     const finalToken = tgToken || process.env.CLAWLINK_TG_TOKEN;
     const finalChat = tgChatId || process.env.CLAWLINK_TG_CHAT;
     this._tg = null;
@@ -65,39 +97,22 @@ class ClawBridge {
       this._tg = new TelegramNotifier({
         token: finalToken,
         chatId: finalChat,
-        onKill: (roomId) => this._handleTgKill(roomId),
-        onSetPerm: (roomId, level) => this._handleTgSetPerm(roomId, level),
+        onKill: (roomId) => this._closeRoom(roomId),
+        onSetPerm: (roomId, level) => this._setRoomPerm(roomId, level),
       });
     }
 
-    // Persistence — per-room subdirectory, resolved when room ID is known
-    this._baseDir = dataDir || path.join(process.env.HOME || '/tmp', '.claw-link');
-    this._dataDir = null;
-    this._inboxPath = null;
-    this._eventsPath = null;
-
-    this.transport = null;
     this.server = null;
-    this.roomId = null;
-    this.peerName = null;
-    this.negotiatedPerm = null;
-
-    this._unread = [];        // messages not yet polled via /recv
-    this._waiters = [];       // pending long-poll resolvers
-    this._msgCount = 0;       // total messages received (for read cursor)
-    this._readCursor = 0;     // messages already returned via /recv
   }
 
   // -- lifecycle -----------------------------------------------------------
 
   start() {
     fs.mkdirSync(this._baseDir, { recursive: true });
-
     return new Promise((resolve) => {
       this.server = http.createServer((req, res) => this._handleHTTP(req, res));
       this.server.listen(this.port, '127.0.0.1', () => {
         this._log(`Bridge HTTP on http://127.0.0.1:${this.port}`);
-        this._appendEvent({ event: 'bridge-start', port: this.port, name: this.name });
         if (this._tg) this._tg.start();
         resolve();
       });
@@ -105,96 +120,60 @@ class ClawBridge {
   }
 
   stop() {
-    this._stopped = true;
     if (this._tg) this._tg.stop();
-    this._appendEvent({ event: 'bridge-stop' });
-    if (this.transport) this.transport.close();
+    for (const [, room] of this.rooms) this._destroyRoom(room);
+    this.rooms.clear();
     if (this.server) this.server.close();
   }
 
-  // -- persistence ---------------------------------------------------------
+  // -- room lifecycle ------------------------------------------------------
 
-  _initRoomDir(roomId) {
-    this._dataDir = path.join(this._baseDir, roomId);
-    fs.mkdirSync(this._dataDir, { recursive: true });
-    this._inboxPath = path.join(this._dataDir, 'inbox.jsonl');
-    this._eventsPath = path.join(this._dataDir, 'events.jsonl');
+  _initRoom(roomId) {
+    if (this.rooms.has(roomId)) return this.rooms.get(roomId);
+    const room = new RoomState(roomId, this._baseDir);
+    this.rooms.set(roomId, room);
+    return room;
   }
 
-  _appendInbox(msg) {
-    if (!this._inboxPath) return;
-    fs.appendFileSync(this._inboxPath, JSON.stringify(msg) + '\n');
-  }
-
-  _appendEvent(data) {
-    if (!this._eventsPath) return;
-    const line = { ts: Date.now(), ...data };
-    fs.appendFileSync(this._eventsPath, JSON.stringify(line) + '\n');
-  }
-
-  _readAllInbox() {
-    if (!this._inboxPath) return [];
-    try {
-      const content = fs.readFileSync(this._inboxPath, 'utf8').trim();
-      if (!content) return [];
-      return content.split('\n').map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
-    } catch { return []; }
-  }
-
-  // -- transport management ------------------------------------------------
-
-  _createTransport(room, { clearInbox = true } = {}) {
-    if (this.transport) {
-      this.transport.removeAllListeners(); // prevent stale events from old transport
-      this.transport.close();
+  _connectRoom(room, targetRoomId) {
+    if (room.transport) {
+      room.transport.removeAllListeners();
+      room.transport.close();
     }
+    room.peerName = null;
+    room.negotiatedPerm = null;
+    room.stopped = false;
 
-    this._unread = [];
-    this.peerName = null;
-    this.negotiatedPerm = null;
-
-    if (clearInbox) {
-      this.roomId = null;
-      this._dataDir = null;
-      this._inboxPath = null;
-      this._eventsPath = null;
-      this._msgCount = 0;
-      this._readCursor = 0;
-    }
-
-    this.transport = new ClawTransport({
+    room.transport = new ClawTransport({
       signalingUrl: this.signalingUrl,
       name: this.name,
       permission: this.permission,
-      room,
+      room: targetRoomId,
     });
 
-    this.transport.on('room', (id) => {
-      this.roomId = id;
-      this._initRoomDir(id);
-      this._appendEvent({ event: 'room', roomId: id });
+    room.transport.on('room', (id) => {
+      room.appendEvent({ event: 'room', roomId: id });
       this._tgNotify('room', { roomId: id });
     });
 
-    this.transport.on('connected', (peer, perm) => {
-      this.peerName = peer;
-      this.negotiatedPerm = perm;
-      this._reconnecting = false;
-      this._reconnectAttempt = 0;
-      this._log(`Connected to ${peer} (${perm})`);
-      this._appendEvent({ event: 'connected', peer, permission: perm });
-      this._runHook('connect', { peer, permission: perm });
-      this._tgNotify('connected', { roomId: this.roomId, peer, permission: perm });
+    room.transport.on('connected', (peer, perm) => {
+      room.peerName = peer;
+      room.negotiatedPerm = perm;
+      room.reconnecting = false;
+      room.reconnectAttempt = 0;
+      this._log(`[${room.roomId}] Connected to ${peer} (${perm})`);
+      room.appendEvent({ event: 'connected', peer, permission: perm });
+      this._runHook('connect', { peer, permission: perm, roomId: room.roomId });
+      this._tgNotify('connected', { roomId: room.roomId, peer, permission: perm });
     });
 
-    this.transport.on('message', (msg) => {
-      this._appendInbox(msg);
-      this._msgCount++;
-      this._unread.push(msg);
-      this._flushWaiters();
-      this._runHook('message', { from: msg.from, type: msg.type, id: msg.id });
-      // TG: extract readable content from payload for display
-      const tgData = { roomId: this.roomId, from: msg.from, type: msg.type };
+    room.transport.on('message', (msg) => {
+      room.appendInbox(msg);
+      room.msgCount++;
+      room.unread.push(msg);
+      this._flushWaiters(room);
+      this._runHook('message', { from: msg.from, type: msg.type, id: msg.id, roomId: room.roomId });
+      const tgData = { roomId: room.roomId, from: msg.from, type: msg.type };
       if (msg.payload) {
         tgData.content = msg.payload.content;
         tgData.description = msg.payload.description;
@@ -205,50 +184,77 @@ class ClawBridge {
       this._tgNotify('message', tgData);
     });
 
-    this.transport.on('disconnected', (reason) => {
-      this._log(`Disconnected: ${reason}`);
-      if (this.peerName) {
-        this._runHook('disconnect', { reason });
-        this._tgNotify('disconnected', { roomId: this.roomId, reason });
+    room.transport.on('disconnected', (reason) => {
+      this._log(`[${room.roomId}] Disconnected: ${reason}`);
+      if (room.peerName) {
+        this._runHook('disconnect', { reason, roomId: room.roomId });
+        this._tgNotify('disconnected', { roomId: room.roomId, reason });
       }
-      this.peerName = null;
-      this._appendEvent({ event: 'disconnected', reason });
-      // Always auto-reconnect if we have a room — backoff controls the pace
-      this._autoReconnect();
+      room.peerName = null;
+      room.appendEvent({ event: 'disconnected', reason });
+      this._autoReconnect(room);
     });
 
-    this.transport.on('error', (err) => {
-      this._appendEvent({ event: 'error', message: err.message });
+    room.transport.on('error', (err) => {
+      room.appendEvent({ event: 'error', message: err.message });
     });
 
-    this.transport.connect();
+    room.transport.connect();
+  }
+
+  _destroyRoom(room) {
+    room.stopped = true;
+    room.reconnecting = false;
+    if (room.reconnectTimer) clearTimeout(room.reconnectTimer);
+    if (room.transport) {
+      room.transport.removeAllListeners();
+      room.transport.close();
+      room.transport = null;
+    }
+    room.appendEvent({ event: 'closed' });
+  }
+
+  _closeRoom(roomId) {
+    const room = this.rooms.get(roomId);
+    if (!room) return;
+    this._log(`Closing room '${roomId}'`);
+    this._destroyRoom(room);
+    this.rooms.delete(roomId);
+    this._tgNotify('killed', { roomId });
+  }
+
+  _setRoomPerm(roomId, level) {
+    const room = this.rooms.get(roomId);
+    if (!room || !room.transport) return;
+    this._log(`[${roomId}] Permission → ${level}`);
+    room.transport.requestedPermission = level;
+    if (room.transport.connected) {
+      room.transport.send({ type: 'handshake', name: this.name, requestedPermission: level, version: '0.1.0' });
+    }
+    room.appendEvent({ event: 'perm-changed', roomId, level });
   }
 
   // -- auto-reconnect ------------------------------------------------------
 
-  _autoReconnect() {
-    if (this._reconnecting || this._stopped || !this.roomId) return;
-    this._reconnecting = true;
-    this._reconnectAttempt = (this._reconnectAttempt || 0) + 1;
-    const room = this.roomId;
-    // Exponential backoff: 5s, 10s, 20s, max 30s — starts at 5s to let old WS fully close
-    const delay = Math.min(5000 * Math.pow(2, this._reconnectAttempt - 1), 30000);
-    this._log(`Auto-reconnect to room '${room}' in ${delay / 1000}s (attempt ${this._reconnectAttempt})...`);
-    this._appendEvent({ event: 'reconnecting', roomId: room, attempt: this._reconnectAttempt });
+  _autoReconnect(room) {
+    if (room.reconnecting || room.stopped) return;
+    room.reconnecting = true;
+    room.reconnectAttempt++;
+    const delay = Math.min(5000 * Math.pow(2, room.reconnectAttempt - 1), 30000);
+    this._log(`[${room.roomId}] Reconnect in ${delay / 1000}s (attempt ${room.reconnectAttempt})`);
+    room.appendEvent({ event: 'reconnecting', attempt: room.reconnectAttempt });
 
-    this._reconnectTimer = setTimeout(() => {
-      this._reconnecting = false;
-      if (this._stopped) return;
-      this._log(`Reconnecting to room '${room}'...`);
-      // Close old transport first, wait a beat, then create new one
-      if (this.transport) {
-        this.transport.removeAllListeners();
-        this.transport.close();
-        this.transport = null;
+    room.reconnectTimer = setTimeout(() => {
+      room.reconnecting = false;
+      if (room.stopped) return;
+      if (room.transport) {
+        room.transport.removeAllListeners();
+        room.transport.close();
+        room.transport = null;
       }
       setTimeout(() => {
-        if (this._stopped) return;
-        this._createTransport(room, { clearInbox: false });
+        if (room.stopped) return;
+        this._connectRoom(room, room.roomId);
       }, 1000);
     }, delay);
   }
@@ -263,84 +269,120 @@ class ClawBridge {
     res.setHeader('Content-Type', 'application/json');
 
     try {
+      // POST /create {roomId?}
       if (method === 'POST' && pathname === '/create') {
-        this._stopped = false;
         const body = await this._readBody(req);
-        this._createTransport(body.roomId || null);
-        await this._waitFor(() => this.roomId, 10000);
-        const invite = generateInvite(this.roomId, {
-          signal: this.signalingUrl,
-          creator: this.name,
-          perm: this.permission,
-        });
-        const invitePath = writeInvite(invite, this._dataDir);
-        return this._json(res, 200, { roomId: this.roomId, inbox: this._inboxPath, invite: invitePath });
+        const room = this._initRoom(body.roomId || '_pending_' + Date.now());
+        this._connectRoom(room, body.roomId || null);
+        // Wait for signaling to assign room ID
+        await this._waitFor(() => room.transport && room.transport.roomId, 10000);
+        const actualId = room.transport.roomId;
+        // Re-register under actual room ID if it was auto-generated
+        if (!body.roomId && actualId) {
+          this.rooms.delete(room.roomId);
+          room.roomId = actualId;
+          room.dataDir = path.join(this._baseDir, actualId);
+          fs.mkdirSync(room.dataDir, { recursive: true });
+          room.inboxPath = path.join(room.dataDir, 'inbox.jsonl');
+          room.eventsPath = path.join(room.dataDir, 'events.jsonl');
+          this.rooms.set(actualId, room);
+        }
+        const invite = generateInvite(actualId, { signal: this.signalingUrl, creator: this.name, perm: this.permission });
+        const invitePath = writeInvite(invite, room.dataDir);
+        return this._json(res, 200, { roomId: actualId, inbox: room.inboxPath, invite: invitePath });
       }
 
+      // POST /join {roomId}
       if (method === 'POST' && pathname === '/join') {
-        this._stopped = false;
         const body = await this._readBody(req);
         if (!body.roomId) return this._json(res, 400, { error: 'roomId required' });
-        this._createTransport(body.roomId);
-        await this._waitFor(() => this.peerName, 15000);
-        return this._json(res, 200, { peer: this.peerName, permission: this.negotiatedPerm, roomId: body.roomId, inbox: this._inboxPath });
+        const room = this._initRoom(body.roomId);
+        this._connectRoom(room, body.roomId);
+        await this._waitFor(() => room.transport && room.transport.roomId, 10000);
+        return this._json(res, 200, { roomId: body.roomId, inbox: room.inboxPath, status: 'waiting-for-peer' });
       }
 
+      // GET /rooms
+      if (method === 'GET' && pathname === '/rooms') {
+        const list = [];
+        for (const [id, room] of this.rooms) {
+          list.push({
+            roomId: id,
+            connected: !!(room.transport && room.transport.connected),
+            peer: room.peerName,
+            permission: room.negotiatedPerm,
+            unread: room.unread.length,
+            total: room.msgCount,
+          });
+        }
+        return this._json(res, 200, list);
+      }
+
+      // GET /status?room=X (specific room or first room)
       if (method === 'GET' && pathname === '/status') {
+        const rid = url.searchParams.get('room');
+        const room = rid ? this.rooms.get(rid) : this.rooms.values().next().value;
+        if (!room) return this._json(res, 200, { connected: false, rooms: this.rooms.size });
         return this._json(res, 200, {
-          connected: !!(this.transport && this.transport.connected),
-          reconnecting: !!this._reconnecting,
-          roomId: this.roomId,
-          peer: this.peerName,
-          permission: this.negotiatedPerm,
-          unread: this._unread.length,
-          total: this._msgCount,
-          inbox: this._inboxPath,
+          connected: !!(room.transport && room.transport.connected),
+          reconnecting: room.reconnecting,
+          roomId: room.roomId,
+          peer: room.peerName,
+          permission: room.negotiatedPerm,
+          unread: room.unread.length,
+          total: room.msgCount,
+          inbox: room.inboxPath,
         });
       }
 
+      // POST /send {roomId, type, ...}
       if (method === 'POST' && pathname === '/send') {
-        if (!this.transport || !this.transport.connected) {
-          return this._json(res, 409, { error: 'Not connected' });
-        }
         const body = await this._readBody(req);
+        const rid = body.roomId;
+        const room = rid ? this.rooms.get(rid) : this.rooms.values().next().value;
+        if (!room) return this._json(res, 404, { error: 'No room' });
+        if (!room.transport || !room.transport.connected) {
+          return this._json(res, 409, { error: `Room '${room.roomId}' not connected` });
+        }
         const envelope = this._buildEnvelope(body);
-        this.transport.send(envelope);
-        return this._json(res, 200, { ok: true, id: envelope.id });
+        room.transport.send(envelope);
+        return this._json(res, 200, { ok: true, id: envelope.id, roomId: room.roomId });
       }
 
+      // GET /recv?room=X&wait=N&all=1
       if (method === 'GET' && pathname === '/recv') {
-        // ?all=1 → re-read entire inbox file (idempotent, safe)
-        if (url.searchParams.get('all') === '1') {
-          return this._json(res, 200, this._readAllInbox());
-        }
+        const rid = url.searchParams.get('room');
+        const room = rid ? this.rooms.get(rid) : this.rooms.values().next().value;
+        if (!room) return this._json(res, 200, []);
 
-        // Normal: return unread messages from memory queue
+        if (url.searchParams.get('all') === '1') {
+          return this._json(res, 200, room.readAllInbox());
+        }
         const waitSec = parseInt(url.searchParams.get('wait') || '0', 10);
-        if (this._unread.length > 0 || waitSec <= 0) {
-          const msgs = this._unread.splice(0);
-          this._readCursor = this._msgCount;
-          return this._json(res, 200, msgs);
+        if (room.unread.length > 0 || waitSec <= 0) {
+          return this._json(res, 200, room.unread.splice(0));
         }
         const clamped = Math.min(Math.max(waitSec, 1), 30);
-        const msgs = await this._longPoll(clamped);
-        this._readCursor = this._msgCount;
+        const msgs = await this._longPoll(room, clamped);
         return this._json(res, 200, msgs);
       }
 
+      // POST /close {roomId}
       if (method === 'POST' && pathname === '/close') {
-        this._reconnecting = false;
-        this._stopped = true;  // prevent auto-reconnect
-        if (this.transport) this.transport.close();
-        this.transport = null;
-        this.peerName = null;
-        this.roomId = null;
-        this._appendEvent({ event: 'closed' });
+        const body = await this._readBody(req);
+        const rid = body.roomId;
+        if (rid) {
+          this._closeRoom(rid);
+        } else {
+          // Close all rooms
+          for (const [id] of this.rooms) this._closeRoom(id);
+        }
         return this._json(res, 200, { ok: true });
       }
 
+      // GET /health
       if (method === 'GET' && pathname === '/health') {
-        return this._json(res, 200, { status: 'ok' });
+        return this._json(res, 200, { status: 'ok', rooms: this.rooms.size });
       }
 
       return this._json(res, 404, { error: 'Not found' });
@@ -366,25 +408,25 @@ class ClawBridge {
 
   // -- long-poll -----------------------------------------------------------
 
-  _longPoll(seconds) {
+  _longPoll(room, seconds) {
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
-        this._waiters = this._waiters.filter((w) => w !== entry);
-        resolve(this._unread.splice(0));
+        room.waiters = room.waiters.filter((w) => w !== entry);
+        resolve(room.unread.splice(0));
       }, seconds * 1000);
       const entry = { resolve, timer };
-      this._waiters.push(entry);
+      room.waiters.push(entry);
     });
   }
 
-  _flushWaiters() {
-    if (this._waiters.length === 0) return;
-    const msgs = this._unread.splice(0);
-    for (const w of this._waiters) {
+  _flushWaiters(room) {
+    if (room.waiters.length === 0) return;
+    const msgs = room.unread.splice(0);
+    for (const w of room.waiters) {
       clearTimeout(w.timer);
       w.resolve(msgs);
     }
-    this._waiters = [];
+    room.waiters = [];
   }
 
   // -- hooks ---------------------------------------------------------------
@@ -407,47 +449,9 @@ class ClawBridge {
     if (this._tg) this._tg.notify(event, data).catch(() => {});
   }
 
-  _handleTgKill(roomId) {
-    if (this.roomId === roomId || !roomId) {
-      this._log(`TG /kill: closing room '${this.roomId}'`);
-      this._stopped = true;
-      this._reconnecting = false;
-      if (this.transport) {
-        this.transport.removeAllListeners();
-        this.transport.close();
-        this.transport = null;
-      }
-      this.peerName = null;
-      this._appendEvent({ event: 'killed-by-tg', roomId: this.roomId });
-      this._tgNotify('killed', { roomId: this.roomId });
-      this.roomId = null;
-    }
-  }
-
-  _handleTgSetPerm(roomId, level) {
-    if (this.roomId === roomId && this.transport) {
-      this._log(`TG /set: permission → ${level}`);
-      this.transport.requestedPermission = level;
-      this.permission = level;
-      // If connected, notify peer of the change
-      if (this.transport.connected) {
-        this.transport.send({
-          type: 'handshake',
-          name: this.name,
-          requestedPermission: level,
-          version: '0.1.0',
-        });
-      }
-      this._appendEvent({ event: 'perm-changed', roomId, level });
-    }
-  }
-
   // -- helpers -------------------------------------------------------------
 
-  _json(res, status, data) {
-    res.writeHead(status);
-    res.end(JSON.stringify(data));
-  }
+  _json(res, status, data) { res.writeHead(status); res.end(JSON.stringify(data)); }
 
   _readBody(req) {
     return new Promise((resolve, reject) => {
