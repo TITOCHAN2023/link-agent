@@ -21,6 +21,10 @@ Security:
   - Payload validation (SDP format, ICE fields)
   - Stale room auto-cleanup (1 hour TTL, 2 hour hard limit)
   - /health HTTP endpoint
+
+Nginx or other reverse proxy NEED TO CONFIGURE:                                                                                                                                                                   
+  proxy_set_header X-Real-IP $remote_addr;                                                                                                                              
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;    
 """
 
 import asyncio
