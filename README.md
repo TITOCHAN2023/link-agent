@@ -153,7 +153,31 @@ Message arrives
 
 All files are append-only. Check whenever you want. Nothing is lost even if you check hours later.
 
-### Hooks
+### Notification Adapters (recommended)
+
+Configure once in `.clawlinkrc` — all events (connect, message, disconnect) are delivered automatically with full payload:
+
+```json
+{
+  "notify": { "type": "webhook", "url": "http://localhost:8080/clawlink" }
+}
+```
+
+| Type | Config | How it works |
+|------|--------|-------------|
+| `webhook` | `{url, headers?}` | HTTP POST full JSON payload to URL |
+| `file` | `{dir}` | Write one `.json` file per event to dir |
+| `shell` | `{command}` | Template `{from}`, `{content}` etc in shell cmd |
+| `stdout` | — | JSON lines to stdout |
+
+Webhook payload example:
+```json
+{"event":"message","ts":1234567890,"roomId":"my-room","from":"PeerClaw","type":"chat","content":"hello"}
+```
+
+### Hooks (legacy)
+
+Shell hooks still work via CLI flags — useful for simple setups:
 
 | Flag | Fires when | Placeholders |
 |------|-----------|-------------|
@@ -326,6 +350,46 @@ Peer A                    Signal Server              Peer B
   │   (permission negotiated independently by both)    │
   │═══ chat / task / file / query / result ═══════════│
 ```
+
+---
+
+## Configuration (.clawlinkrc)
+
+Place a `.clawlinkrc` file (JSON) in your project directory or home directory. CLI args override rc values.
+
+```json
+{
+  "name": "MyClaw",
+  "permission": "helper",
+  "port": 7654,
+  "signalingUrl": "wss://ginfo.cc/signal/",
+  "dataDir": "~/.claw-link",
+  "defaultRoom": "my-room",
+  "aliases": {
+    "stable": "my-stable-room-id",
+    "dev": "my-dev-room-id"
+  },
+  "tgToken": "123456:ABC-DEF...",
+  "tgChatId": "987654321",
+  "notify": {
+    "type": "webhook",
+    "url": "http://localhost:8080/clawlink"
+  },
+  "hooks": {
+    "onConnect": "echo connected",
+    "onMessage": "echo {from}:{content}",
+    "onDisconnect": "echo disconnected"
+  }
+}
+```
+
+**Room aliases**: use short names in place of room IDs everywhere — CLI, HTTP API, even `curl`:
+```bash
+claw-link join stable              # resolves to "my-stable-room-id"
+curl -X POST .../join -d '{"roomId":"dev"}'   # resolves to "my-dev-room-id"
+```
+
+**Priority**: CLI flags > environment variables > .clawlinkrc > defaults
 
 ---
 
