@@ -7,6 +7,9 @@ const { ClawClient } = require('./client');
 const { ClawAgent } = require('./agent');
 const { describe } = require('./permissions');
 const { generateInvite } = require('./invite');
+const { loadRC, resolveAlias } = require('./rc');
+
+const rc = loadRC();
 
 const program = new Command();
 program.name('claw-link').description('P2P communication tool for OpenClaw instances').version('0.1.0');
@@ -22,12 +25,13 @@ program
   .command('create')
   .description('Create a room and wait for a peer to join')
   .option('-r, --room <id>', 'Custom room ID (default: server-generated)')
-  .option('-s, --signal <url>', 'Signaling server URL', 'wss://ginfo.cc/signal/')
-  .option('-n, --name <name>', 'Your Claw name', 'ClawA')
-  .option('--perm <level>', 'Permission level: intimate | helper | chat', 'helper')
+  .option('-s, --signal <url>', 'Signaling server URL', rc.signalingUrl || 'wss://ginfo.cc/signal/')
+  .option('-n, --name <name>', 'Your Claw name', rc.name || 'ClawA')
+  .option('--perm <level>', 'Permission level: intimate | helper | chat', rc.permission || 'helper')
   .option('--json', 'Machine-readable JSON lines mode (for agents)')
   .action(async (opts) => {
-    const client = makeClient(opts, opts.room ? { room: opts.room } : {});
+    const roomId = resolveAlias(rc, opts.room) || opts.room;
+    const client = makeClient(opts, roomId ? { room: roomId } : {});
 
     if (!opts.json) {
       console.log(chalk.bold('\n🔗 claw-link — Create Room\n'));
@@ -50,11 +54,12 @@ program
 program
   .command('join <room-id>')
   .description('Join an existing room by room ID')
-  .option('-s, --signal <url>', 'Signaling server URL', 'wss://ginfo.cc/signal/')
-  .option('-n, --name <name>', 'Your Claw name', 'ClawB')
-  .option('--perm <level>', 'Permission level: intimate | helper | chat', 'helper')
+  .option('-s, --signal <url>', 'Signaling server URL', rc.signalingUrl || 'wss://ginfo.cc/signal/')
+  .option('-n, --name <name>', 'Your Claw name', rc.name || 'ClawB')
+  .option('--perm <level>', 'Permission level: intimate | helper | chat', rc.permission || 'helper')
   .option('--json', 'Machine-readable JSON lines mode (for agents)')
-  .action(async (roomId, opts) => {
+  .action(async (rawRoomId, opts) => {
+    const roomId = resolveAlias(rc, rawRoomId);
     if (!opts.json) {
       console.log(chalk.bold('\n🔗 claw-link — Join Room\n'));
       console.log(chalk.gray(`Room: ${roomId} | Permission: ${opts.perm.toUpperCase()}\n`));
@@ -101,16 +106,16 @@ program
 const bridgeCmd = program
   .command('bridge')
   .description('Start HTTP bridge for serial agents (auto-daemonizes)')
-  .option('-p, --port <port>', 'HTTP port', '7654')
-  .option('-s, --signal <url>', 'Signaling server URL', 'wss://ginfo.cc/signal/')
-  .option('-n, --name <name>', 'Your Claw name', 'Claw')
-  .option('--perm <level>', 'Permission level', 'helper')
-  .option('--data-dir <path>', 'Directory for inbox/events files', '')
-  .option('--on-connect <cmd>', 'Shell command on peer connect (use {peer})')
-  .option('--on-message <cmd>', 'Shell command on message (use {from}, {type})')
-  .option('--on-disconnect <cmd>', 'Shell command on disconnect (use {reason})')
-  .option('--tg-token <token>', 'Telegram bot token for notifications')
-  .option('--tg-chat <id>', 'Telegram chat ID for notifications')
+  .option('-p, --port <port>', 'HTTP port', rc.port ? String(rc.port) : '7654')
+  .option('-s, --signal <url>', 'Signaling server URL', rc.signalingUrl || 'wss://ginfo.cc/signal/')
+  .option('-n, --name <name>', 'Your Claw name', rc.name || 'Claw')
+  .option('--perm <level>', 'Permission level', rc.permission || 'helper')
+  .option('--data-dir <path>', 'Directory for inbox/events files', rc.dataDir || '')
+  .option('--on-connect <cmd>', 'Shell command on peer connect', rc.hooks?.onConnect || '')
+  .option('--on-message <cmd>', 'Shell command on message', rc.hooks?.onMessage || '')
+  .option('--on-disconnect <cmd>', 'Shell command on disconnect', rc.hooks?.onDisconnect || '')
+  .option('--tg-token <token>', 'Telegram bot token for notifications', rc.tgToken || '')
+  .option('--tg-chat <id>', 'Telegram chat ID for notifications', rc.tgChatId || '')
   .option('--foreground', 'Run in foreground (don\'t daemonize)')
   .option('--daemon-child', '(internal) actual bridge process')
   .action(async (opts) => {
@@ -126,6 +131,7 @@ const bridgeCmd = program
       onDisconnect: opts.onDisconnect,
       tgToken: opts.tgToken,
       tgChatId: opts.tgChat,
+      aliases: rc.aliases,
     };
 
     // ── If this is the daemon child, run the bridge ──

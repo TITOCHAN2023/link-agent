@@ -77,11 +77,13 @@ class ClawBridge {
     onDisconnect,
     tgToken,
     tgChatId,
+    aliases,
   } = {}) {
     this.port = port;
     this.signalingUrl = signalingUrl;
     this.name = name;
     this.permission = permission;
+    this._aliases = aliases || {};
 
     this.hooks = { connect: onConnect, message: onMessage, disconnect: onDisconnect };
     this._baseDir = dataDir || path.join(process.env.HOME || '/tmp', '.claw-link');
@@ -278,8 +280,9 @@ class ClawBridge {
       // POST /create {roomId?}
       if (method === 'POST' && pathname === '/create') {
         const body = await this._readBody(req);
-        const room = this._initRoom(body.roomId || '_pending_' + Date.now());
-        this._connectRoom(room, body.roomId || null);
+        const resolvedRoom = this._resolveAlias(body.roomId);
+        const room = this._initRoom(resolvedRoom || '_pending_' + Date.now());
+        this._connectRoom(room, resolvedRoom || null);
         // Wait for signaling to assign room ID
         await this._waitFor(() => room.transport && room.transport.roomId, 10000);
         const actualId = room.transport.roomId;
@@ -302,10 +305,11 @@ class ClawBridge {
       if (method === 'POST' && pathname === '/join') {
         const body = await this._readBody(req);
         if (!body.roomId) return this._json(res, 400, { error: 'roomId required' });
-        const room = this._initRoom(body.roomId);
-        this._connectRoom(room, body.roomId);
+        const rid = this._resolveAlias(body.roomId);
+        const room = this._initRoom(rid);
+        this._connectRoom(room, rid);
         await this._waitFor(() => room.transport && room.transport.roomId, 10000);
-        return this._json(res, 200, { roomId: body.roomId, inbox: room.inboxPath, status: 'waiting-for-peer' });
+        return this._json(res, 200, { roomId: rid, inbox: room.inboxPath, status: 'waiting-for-peer' });
       }
 
       // GET /rooms
@@ -324,9 +328,9 @@ class ClawBridge {
         return this._json(res, 200, list);
       }
 
-      // GET /status?room=X (specific room or first room)
+      // GET /status?room=X (specific room or first room, supports aliases)
       if (method === 'GET' && pathname === '/status') {
-        const rid = url.searchParams.get('room');
+        const rid = this._resolveAlias(url.searchParams.get('room'));
         const room = rid ? this.rooms.get(rid) : this.rooms.values().next().value;
         if (!room) return this._json(res, 200, { connected: false, rooms: this.rooms.size });
         return this._json(res, 200, {
@@ -344,7 +348,7 @@ class ClawBridge {
       // POST /send {roomId, type, ...}
       if (method === 'POST' && pathname === '/send') {
         const body = await this._readBody(req);
-        const rid = body.roomId;
+        const rid = this._resolveAlias(body.roomId);
         const room = rid ? this.rooms.get(rid) : this.rooms.values().next().value;
         if (!room) return this._json(res, 404, { error: 'No room' });
         if (!room.transport || !room.transport.connected) {
@@ -365,7 +369,7 @@ class ClawBridge {
 
       // GET /recv?room=X&wait=N&all=1
       if (method === 'GET' && pathname === '/recv') {
-        const rid = url.searchParams.get('room');
+        const rid = this._resolveAlias(url.searchParams.get('room'));
         const room = rid ? this.rooms.get(rid) : this.rooms.values().next().value;
         if (!room) return this._json(res, 200, []);
 
@@ -384,7 +388,7 @@ class ClawBridge {
       // POST /close {roomId}
       if (method === 'POST' && pathname === '/close') {
         const body = await this._readBody(req);
-        const rid = body.roomId;
+        const rid = this._resolveAlias(body.roomId);
         if (rid) {
           this._closeRoom(rid);
         } else {
@@ -441,6 +445,13 @@ class ClawBridge {
       w.resolve(msgs);
     }
     room.waiters = [];
+  }
+
+  // -- alias ---------------------------------------------------------------
+
+  _resolveAlias(id) {
+    if (!id) return id;
+    return this._aliases[id] || id;
   }
 
   // -- hooks ---------------------------------------------------------------

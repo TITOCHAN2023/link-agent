@@ -6,6 +6,7 @@ const { ClawBridge } = require('./src/bridge');
 const protocol = require('./src/protocol');
 const permissions = require('./src/permissions');
 const { SessionManager } = require('./src/session');
+const { loadRC, resolveAlias } = require('./src/rc');
 
 module.exports = {
   ClawTransport,
@@ -14,6 +15,8 @@ module.exports = {
   protocol,
   permissions,
   SessionManager,
+  loadRC,
+  resolveAlias,
   DEFAULT_SIGNALING,
   STUN_SERVERS,
 };
