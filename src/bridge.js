@@ -286,8 +286,10 @@ class ClawBridge {
       }
       this._runHook('message', hookData);
       const tgData = { roomId: room.roomId, from: msg.from, type: msg.type };
+      if (msg.text) tgData.text = msg.text;
       if (msg.payload) {
         tgData.content = msg.payload.content;
+        tgData.text = tgData.text || msg.payload.text;
         tgData.description = msg.payload.description;
         tgData.question = msg.payload.question;
         tgData.name = msg.payload.name;
@@ -501,8 +503,10 @@ class ClawBridge {
         }
         // Notify TG of outbound messages too (so user sees both sides)
         const tgOut = { roomId: room.roomId, from: this.name + ' (me)', type: envelope.type };
+        if (envelope.text) tgOut.text = envelope.text;
         if (envelope.payload) {
           tgOut.content = envelope.payload.content;
+          tgOut.text = tgOut.text || envelope.payload.text;
           tgOut.description = envelope.payload.description;
           tgOut.question = envelope.payload.question;
         }
