@@ -28,11 +28,17 @@ class RoomState {
     fs.mkdirSync(this.dataDir, { recursive: true });
     this.inboxPath = path.join(this.dataDir, 'inbox.jsonl');
     this.eventsPath = path.join(this.dataDir, 'events.jsonl');
+    this.pendingPath = path.join(this.dataDir, 'pending.jsonl');
 
     // Message queue
     this.unread = [];
     this.waiters = [];
     this.msgCount = 0;
+
+    // ACK tracking: pending outbound messages awaiting ACK
+    this.pending = this._loadPending();
+    // Dedup: set of recently seen inbound message IDs
+    this.seenIds = new Set();
   }
 
   appendInbox(msg) {
@@ -49,6 +55,45 @@ class RoomState {
       if (!c) return [];
       return c.split('\n').map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
     } catch { return []; }
+  }
+
+  // -- pending queue (ACK tracking) ------------------------------------
+
+  addPending(msg) {
+    this.pending.set(msg.id, msg);
+    this._savePending();
+  }
+
+  ackReceived(msgId) {
+    if (this.pending.delete(msgId)) {
+      this._savePending();
+      return true;
+    }
+    return false;
+  }
+
+  getPending() {
+    return [...this.pending.values()];
+  }
+
+  _loadPending() {
+    try {
+      const c = fs.readFileSync(this.pendingPath, 'utf8').trim();
+      if (!c) return new Map();
+      const map = new Map();
+      for (const line of c.split('\n')) {
+        try {
+          const msg = JSON.parse(line);
+          if (msg && msg.id) map.set(msg.id, msg);
+        } catch { /* skip corrupt lines */ }
+      }
+      return map;
+    } catch { return new Map(); }
+  }
+
+  _savePending() {
+    const lines = [...this.pending.values()].map(m => JSON.stringify(m)).join('\n');
+    fs.writeFileSync(this.pendingPath, lines ? lines + '\n' : '');
   }
 }
 
@@ -167,9 +212,33 @@ class ClawBridge {
       room.appendEvent({ event: 'connected', peer, permission: perm });
       this._runHook('connect', { peer, permission: perm, roomId: room.roomId });
       this._tgNotify('connected', { roomId: room.roomId, peer, permission: perm });
+      // Replay pending (unACKed) messages after reconnect
+      this._replayPending(room);
     });
 
     room.transport.on('message', (msg) => {
+      // Handle ACK: remove from pending, don't deliver to user
+      if (msg.type === 'ack' && msg.replyTo) {
+        room.ackReceived(msg.replyTo);
+        this._log(`[${room.roomId}] ACK for ${msg.replyTo}`);
+        return;
+      }
+      // Dedup: skip if we've already seen this message ID
+      if (msg.id && room.seenIds.has(msg.id)) {
+        this._log(`[${room.roomId}] Dedup skip ${msg.id}`);
+        // Still send ACK back for retransmitted messages
+        this._sendAck(room, msg.id);
+        return;
+      }
+      if (msg.id) {
+        room.seenIds.add(msg.id);
+        // Cap seen set at 1000 to avoid unbounded growth
+        if (room.seenIds.size > 1000) {
+          const first = room.seenIds.values().next().value;
+          room.seenIds.delete(first);
+        }
+      }
+
       room.appendInbox(msg);
       room.msgCount++;
       room.unread.push(msg);
@@ -190,6 +259,8 @@ class ClawBridge {
         tgData.data = msg.payload.data;
       }
       this._tgNotify('message', tgData);
+      // Auto-ACK back to sender
+      this._sendAck(room, msg.id);
     });
 
     room.transport.on('disconnected', (reason) => {
@@ -341,6 +412,7 @@ class ClawBridge {
           permission: room.negotiatedPerm,
           unread: room.unread.length,
           total: room.msgCount,
+          pending: room.pending.size,
           inbox: room.inboxPath,
         });
       }
@@ -356,6 +428,10 @@ class ClawBridge {
         }
         const envelope = this._buildEnvelope(body);
         room.transport.send(envelope);
+        // Track in pending queue (ACK not needed for ack messages)
+        if (envelope.type !== 'ack') {
+          room.addPending(envelope);
+        }
         // Notify TG of outbound messages too (so user sees both sides)
         const tgOut = { roomId: room.roomId, from: this.name + ' (me)', type: envelope.type };
         if (envelope.payload) {
@@ -421,6 +497,25 @@ class ClawBridge {
       case 'query':  return proto.query(body.question || '', this.name);
       case 'ack':    return proto.ack(body.replyTo || '', this.name);
       default:       return proto.createMessage(body.type || 'chat', body.payload || body, { from: this.name });
+    }
+  }
+
+  // -- ACK helpers ---------------------------------------------------------
+
+  _sendAck(room, msgId) {
+    if (!msgId || !room.transport || !room.transport.connected) return;
+    try {
+      const ackMsg = proto.ack(msgId, this.name);
+      room.transport.send(ackMsg);
+    } catch { /* ignore if DC closed between check and send */ }
+  }
+
+  _replayPending(room) {
+    const msgs = room.getPending();
+    if (msgs.length === 0) return;
+    this._log(`[${room.roomId}] Replaying ${msgs.length} pending messages`);
+    for (const msg of msgs) {
+      try { room.transport.send(msg); } catch { break; }
     }
   }
 
