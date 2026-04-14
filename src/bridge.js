@@ -346,6 +346,14 @@ class ClawBridge {
         }
         const envelope = this._buildEnvelope(body);
         room.transport.send(envelope);
+        // Notify TG of outbound messages too (so user sees both sides)
+        const tgOut = { roomId: room.roomId, from: this.name + ' (me)', type: envelope.type };
+        if (envelope.payload) {
+          tgOut.content = envelope.payload.content;
+          tgOut.description = envelope.payload.description;
+          tgOut.question = envelope.payload.question;
+        }
+        this._tgNotify('message', tgOut);
         return this._json(res, 200, { ok: true, id: envelope.id, roomId: room.roomId });
       }
 
