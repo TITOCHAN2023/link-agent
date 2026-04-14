@@ -37,6 +37,11 @@ class SignalingServer {
     let roomId;
     if (pathParts.length > 0) {
       roomId = pathParts[pathParts.length - 1];
+      if (!/^[a-zA-Z0-9_-]+$/.test(roomId)) {
+        this._send(ws, { type: 'error', payload: 'Invalid roomId: only alphanumeric, hyphen and underscore are allowed' });
+        ws.close();
+        return;
+      }
     } else {
       roomId = crypto.randomBytes(4).toString('hex');
     }

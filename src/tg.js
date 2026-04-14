@@ -56,6 +56,8 @@ class TelegramNotifier {
       case 'message': {
         const from = esc(d.from || '?');
         switch (d.type) {
+          case 'text':
+            return `💬 ${room} <b>${from}</b>: ${esc(d.text || d.content || '')}`;
           case 'chat':
             return `💬 ${room} <b>${from}</b>: ${esc(d.content || '')}`;
           case 'task':
