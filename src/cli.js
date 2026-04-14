@@ -114,6 +114,7 @@ const bridgeCmd = program
   .option('--on-connect <cmd>', 'Shell command on peer connect', rc.hooks?.onConnect || '')
   .option('--on-message <cmd>', 'Shell command on message', rc.hooks?.onMessage || '')
   .option('--on-disconnect <cmd>', 'Shell command on disconnect', rc.hooks?.onDisconnect || '')
+  .option('--intro <text>', 'Self-introduction sent on connect', rc.intro || '')
   .option('--tg-token <token>', 'Telegram bot token for notifications', rc.tgToken || '')
   .option('--tg-chat <id>', 'Telegram chat ID for notifications', rc.tgChatId || '')
   .option('--foreground', 'Run in foreground (don\'t daemonize)')
@@ -126,6 +127,7 @@ const bridgeCmd = program
       name: opts.name,
       permission: opts.perm,
       dataDir: opts.dataDir || undefined,
+      intro: opts.intro,
       onConnect: opts.onConnect,
       onMessage: opts.onMessage,
       onDisconnect: opts.onDisconnect,

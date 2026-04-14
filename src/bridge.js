@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
@@ -125,11 +126,13 @@ class ClawBridge {
     tgChatId,
     aliases,
     notify,
+    intro,
   } = {}) {
     this.port = port;
     this.signalingUrl = signalingUrl;
     this.name = name;
     this.permission = permission;
+    this.intro = intro || '';
     this._aliases = aliases || {};
 
     this.hooks = { connect: onConnect, message: onMessage, disconnect: onDisconnect };
@@ -230,6 +233,12 @@ class ClawBridge {
       room.appendEvent({ event: 'connected', peer, permission: perm });
       this._runHook('connect', { peer, permission: perm, roomId: room.roomId });
       this._tgNotify('connected', { roomId: room.roomId, peer, permission: perm });
+      // Auto-introduce on first connect (not reconnect)
+      if (this.intro && room.reconnectAttempt === 0) {
+        try {
+          room.transport.send({ type: 'intro', from: this.name, text: this.intro, id: crypto.randomBytes(4).toString('hex'), ts: Date.now() });
+        } catch {}
+      }
       // Replay pending (unACKed) messages after reconnect
       this._replayPending(room);
       // Start heartbeat
