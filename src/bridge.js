@@ -53,10 +53,11 @@ class ClawBridge {
 
     this.hooks = { connect: onConnect, message: onMessage, disconnect: onDisconnect };
 
-    // Persistence
-    this._dataDir = dataDir || path.join(process.env.HOME || '/tmp', '.claw-link');
-    this._inboxPath = path.join(this._dataDir, 'inbox.jsonl');
-    this._eventsPath = path.join(this._dataDir, 'events.jsonl');
+    // Persistence — per-room subdirectory, resolved when room ID is known
+    this._baseDir = dataDir || path.join(process.env.HOME || '/tmp', '.claw-link');
+    this._dataDir = null;
+    this._inboxPath = null;
+    this._eventsPath = null;
 
     this.transport = null;
     this.server = null;
@@ -73,14 +74,12 @@ class ClawBridge {
   // -- lifecycle -----------------------------------------------------------
 
   start() {
-    // Ensure data directory exists
-    fs.mkdirSync(this._dataDir, { recursive: true });
+    fs.mkdirSync(this._baseDir, { recursive: true });
 
     return new Promise((resolve) => {
       this.server = http.createServer((req, res) => this._handleHTTP(req, res));
       this.server.listen(this.port, '127.0.0.1', () => {
         this._log(`Bridge HTTP on http://127.0.0.1:${this.port}`);
-        this._log(`Inbox: ${this._inboxPath}`);
         this._appendEvent({ event: 'bridge-start', port: this.port, name: this.name });
         resolve();
       });
@@ -88,6 +87,7 @@ class ClawBridge {
   }
 
   stop() {
+    this._stopped = true;
     this._appendEvent({ event: 'bridge-stop' });
     if (this.transport) this.transport.close();
     if (this.server) this.server.close();
@@ -95,16 +95,26 @@ class ClawBridge {
 
   // -- persistence ---------------------------------------------------------
 
+  _initRoomDir(roomId) {
+    this._dataDir = path.join(this._baseDir, roomId);
+    fs.mkdirSync(this._dataDir, { recursive: true });
+    this._inboxPath = path.join(this._dataDir, 'inbox.jsonl');
+    this._eventsPath = path.join(this._dataDir, 'events.jsonl');
+  }
+
   _appendInbox(msg) {
+    if (!this._inboxPath) return;
     fs.appendFileSync(this._inboxPath, JSON.stringify(msg) + '\n');
   }
 
   _appendEvent(data) {
+    if (!this._eventsPath) return;
     const line = { ts: Date.now(), ...data };
     fs.appendFileSync(this._eventsPath, JSON.stringify(line) + '\n');
   }
 
   _readAllInbox() {
+    if (!this._inboxPath) return [];
     try {
       const content = fs.readFileSync(this._inboxPath, 'utf8').trim();
       if (!content) return [];
@@ -114,18 +124,24 @@ class ClawBridge {
 
   // -- transport management ------------------------------------------------
 
-  _createTransport(room) {
-    if (this.transport) this.transport.close();
+  _createTransport(room, { clearInbox = true } = {}) {
+    if (this.transport) {
+      this.transport.removeAllListeners(); // prevent stale events from old transport
+      this.transport.close();
+    }
 
     this._unread = [];
     this.peerName = null;
     this.negotiatedPerm = null;
-    this.roomId = null;
 
-    // Clear inbox for new session
-    fs.writeFileSync(this._inboxPath, '');
-    this._msgCount = 0;
-    this._readCursor = 0;
+    if (clearInbox) {
+      this.roomId = null;
+      this._dataDir = null;
+      this._inboxPath = null;
+      this._eventsPath = null;
+      this._msgCount = 0;
+      this._readCursor = 0;
+    }
 
     this.transport = new ClawTransport({
       signalingUrl: this.signalingUrl,
@@ -136,23 +152,23 @@ class ClawBridge {
 
     this.transport.on('room', (id) => {
       this.roomId = id;
+      this._initRoomDir(id);
       this._appendEvent({ event: 'room', roomId: id });
     });
 
     this.transport.on('connected', (peer, perm) => {
       this.peerName = peer;
       this.negotiatedPerm = perm;
+      this._reconnecting = false;
+      this._reconnectAttempt = 0;
       this._log(`Connected to ${peer} (${perm})`);
       this._appendEvent({ event: 'connected', peer, permission: perm });
       this._runHook('connect', { peer, permission: perm });
     });
 
     this.transport.on('message', (msg) => {
-      // Persist to disk FIRST — this is the guarantee
       this._appendInbox(msg);
       this._msgCount++;
-
-      // Then queue in memory for /recv
       this._unread.push(msg);
       this._flushWaiters();
       this._runHook('message', { from: msg.from, type: msg.type, id: msg.id });
@@ -160,9 +176,13 @@ class ClawBridge {
 
     this.transport.on('disconnected', (reason) => {
       this._log(`Disconnected: ${reason}`);
+      if (this.peerName) {
+        this._runHook('disconnect', { reason });
+      }
       this.peerName = null;
       this._appendEvent({ event: 'disconnected', reason });
-      this._runHook('disconnect', { reason });
+      // Always auto-reconnect if we have a room — backoff controls the pace
+      this._autoReconnect();
     });
 
     this.transport.on('error', (err) => {
@@ -170,6 +190,35 @@ class ClawBridge {
     });
 
     this.transport.connect();
+  }
+
+  // -- auto-reconnect ------------------------------------------------------
+
+  _autoReconnect() {
+    if (this._reconnecting || this._stopped || !this.roomId) return;
+    this._reconnecting = true;
+    this._reconnectAttempt = (this._reconnectAttempt || 0) + 1;
+    const room = this.roomId;
+    // Exponential backoff: 5s, 10s, 20s, max 30s — starts at 5s to let old WS fully close
+    const delay = Math.min(5000 * Math.pow(2, this._reconnectAttempt - 1), 30000);
+    this._log(`Auto-reconnect to room '${room}' in ${delay / 1000}s (attempt ${this._reconnectAttempt})...`);
+    this._appendEvent({ event: 'reconnecting', roomId: room, attempt: this._reconnectAttempt });
+
+    this._reconnectTimer = setTimeout(() => {
+      this._reconnecting = false;
+      if (this._stopped) return;
+      this._log(`Reconnecting to room '${room}'...`);
+      // Close old transport first, wait a beat, then create new one
+      if (this.transport) {
+        this.transport.removeAllListeners();
+        this.transport.close();
+        this.transport = null;
+      }
+      setTimeout(() => {
+        if (this._stopped) return;
+        this._createTransport(room, { clearInbox: false });
+      }, 1000);
+    }, delay);
   }
 
   // -- HTTP handler --------------------------------------------------------
@@ -183,6 +232,7 @@ class ClawBridge {
 
     try {
       if (method === 'POST' && pathname === '/create') {
+        this._stopped = false;
         const body = await this._readBody(req);
         this._createTransport(body.roomId || null);
         await this._waitFor(() => this.roomId, 10000);
@@ -196,6 +246,7 @@ class ClawBridge {
       }
 
       if (method === 'POST' && pathname === '/join') {
+        this._stopped = false;
         const body = await this._readBody(req);
         if (!body.roomId) return this._json(res, 400, { error: 'roomId required' });
         this._createTransport(body.roomId);
@@ -206,6 +257,7 @@ class ClawBridge {
       if (method === 'GET' && pathname === '/status') {
         return this._json(res, 200, {
           connected: !!(this.transport && this.transport.connected),
+          reconnecting: !!this._reconnecting,
           roomId: this.roomId,
           peer: this.peerName,
           permission: this.negotiatedPerm,
@@ -245,6 +297,8 @@ class ClawBridge {
       }
 
       if (method === 'POST' && pathname === '/close') {
+        this._reconnecting = false;
+        this._stopped = true;  // prevent auto-reconnect
         if (this.transport) this.transport.close();
         this.transport = null;
         this.peerName = null;

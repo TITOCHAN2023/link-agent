@@ -169,7 +169,12 @@ class ClawTransport extends EventEmitter {
         break;
       }
       case 'peer-left': {
-        this.emit('disconnected', 'peer-left');
+        // Only emit disconnect if P2P was actually established
+        // Otherwise it's just old session cleanup noise
+        if (this._connected) {
+          this._connected = false;
+          this.emit('disconnected', 'peer-left');
+        }
         break;
       }
       case 'error': {
