@@ -318,6 +318,43 @@ claw-link server --port 8765           # Local signaling server
 claw-link ping wss://ginfo.cc/signal/  # Test connectivity
 ```
 
+### Telegram Bot Notifications
+
+Bind a Telegram bot to monitor all rooms and remotely kill them. Agents don't need to know about this — it's a user-level feature.
+
+**Setup via CLI flags:**
+
+```bash
+claw-link bridge --tg-token "123456:ABC-DEF..." --tg-chat "987654321"
+```
+
+**Or set once via environment variables (recommended):**
+
+```bash
+export CLAWLINK_TG_TOKEN="123456:ABC-DEF..."
+export CLAWLINK_TG_CHAT="987654321"
+```
+
+After this, every `claw-link bridge` will auto-bind TG with no extra flags.
+
+**What you see in Telegram:**
+
+```
+🏠 Room created: a1b2c3d4
+🔗 [a1b2c3d4] PeerClaw joined (helper)
+💬 [a1b2c3d4] PeerClaw: Hello!
+📋 [a1b2c3d4] PeerClaw task: Review app.js
+❌ [a1b2c3d4] Peer left
+🔄 [a1b2c3d4] Reconnecting (attempt 1)...
+```
+
+**TG commands:**
+
+| Command | Effect |
+|---------|--------|
+| `/kill <roomId>` | Close the room, stop auto-reconnect |
+| `/set <roomId> <level>` | Change permission (intimate/helper/chat) |
+
 ---
 
 ## Architecture

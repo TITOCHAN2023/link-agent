@@ -7,6 +7,7 @@ const { execFile } = require('child_process');
 const { ClawTransport } = require('./transport');
 const proto = require('./protocol');
 const { generateInvite, writeInvite } = require('./invite');
+const { TelegramNotifier } = require('./tg');
 
 /**
  * ClawBridge — local HTTP bridge for serial / low-capability agents.
@@ -45,6 +46,8 @@ class ClawBridge {
     onConnect,
     onMessage,
     onDisconnect,
+    tgToken,           // Telegram bot token (optional)
+    tgChatId,          // Telegram chat ID (optional)
   } = {}) {
     this.port = port;
     this.signalingUrl = signalingUrl;
@@ -52,6 +55,20 @@ class ClawBridge {
     this.permission = permission;
 
     this.hooks = { connect: onConnect, message: onMessage, disconnect: onDisconnect };
+
+    // Telegram bot (optional — user monitoring, agent doesn't see this)
+    // Falls back to env: CLAWLINK_TG_TOKEN, CLAWLINK_TG_CHAT
+    const finalToken = tgToken || process.env.CLAWLINK_TG_TOKEN;
+    const finalChat = tgChatId || process.env.CLAWLINK_TG_CHAT;
+    this._tg = null;
+    if (finalToken && finalChat) {
+      this._tg = new TelegramNotifier({
+        token: finalToken,
+        chatId: finalChat,
+        onKill: (roomId) => this._handleTgKill(roomId),
+        onSetPerm: (roomId, level) => this._handleTgSetPerm(roomId, level),
+      });
+    }
 
     // Persistence — per-room subdirectory, resolved when room ID is known
     this._baseDir = dataDir || path.join(process.env.HOME || '/tmp', '.claw-link');
@@ -81,6 +98,7 @@ class ClawBridge {
       this.server.listen(this.port, '127.0.0.1', () => {
         this._log(`Bridge HTTP on http://127.0.0.1:${this.port}`);
         this._appendEvent({ event: 'bridge-start', port: this.port, name: this.name });
+        if (this._tg) this._tg.start();
         resolve();
       });
     });
@@ -88,6 +106,7 @@ class ClawBridge {
 
   stop() {
     this._stopped = true;
+    if (this._tg) this._tg.stop();
     this._appendEvent({ event: 'bridge-stop' });
     if (this.transport) this.transport.close();
     if (this.server) this.server.close();
@@ -154,6 +173,7 @@ class ClawBridge {
       this.roomId = id;
       this._initRoomDir(id);
       this._appendEvent({ event: 'room', roomId: id });
+      this._tgNotify('room', { roomId: id });
     });
 
     this.transport.on('connected', (peer, perm) => {
@@ -164,6 +184,7 @@ class ClawBridge {
       this._log(`Connected to ${peer} (${perm})`);
       this._appendEvent({ event: 'connected', peer, permission: perm });
       this._runHook('connect', { peer, permission: perm });
+      this._tgNotify('connected', { roomId: this.roomId, peer, permission: perm });
     });
 
     this.transport.on('message', (msg) => {
@@ -172,12 +193,23 @@ class ClawBridge {
       this._unread.push(msg);
       this._flushWaiters();
       this._runHook('message', { from: msg.from, type: msg.type, id: msg.id });
+      // TG: extract readable content from payload for display
+      const tgData = { roomId: this.roomId, from: msg.from, type: msg.type };
+      if (msg.payload) {
+        tgData.content = msg.payload.content;
+        tgData.description = msg.payload.description;
+        tgData.question = msg.payload.question;
+        tgData.name = msg.payload.name;
+        tgData.data = msg.payload.data;
+      }
+      this._tgNotify('message', tgData);
     });
 
     this.transport.on('disconnected', (reason) => {
       this._log(`Disconnected: ${reason}`);
       if (this.peerName) {
         this._runHook('disconnect', { reason });
+        this._tgNotify('disconnected', { roomId: this.roomId, reason });
       }
       this.peerName = null;
       this._appendEvent({ event: 'disconnected', reason });
@@ -367,6 +399,47 @@ class ClawBridge {
     execFile('/bin/sh', ['-c', expanded], { timeout: 10000 }, (err) => {
       if (err) this._log(`Hook '${event}' failed: ${err.message}`);
     });
+  }
+
+  // -- telegram ------------------------------------------------------------
+
+  _tgNotify(event, data) {
+    if (this._tg) this._tg.notify(event, data).catch(() => {});
+  }
+
+  _handleTgKill(roomId) {
+    if (this.roomId === roomId || !roomId) {
+      this._log(`TG /kill: closing room '${this.roomId}'`);
+      this._stopped = true;
+      this._reconnecting = false;
+      if (this.transport) {
+        this.transport.removeAllListeners();
+        this.transport.close();
+        this.transport = null;
+      }
+      this.peerName = null;
+      this._appendEvent({ event: 'killed-by-tg', roomId: this.roomId });
+      this._tgNotify('killed', { roomId: this.roomId });
+      this.roomId = null;
+    }
+  }
+
+  _handleTgSetPerm(roomId, level) {
+    if (this.roomId === roomId && this.transport) {
+      this._log(`TG /set: permission → ${level}`);
+      this.transport.requestedPermission = level;
+      this.permission = level;
+      // If connected, notify peer of the change
+      if (this.transport.connected) {
+        this.transport.send({
+          type: 'handshake',
+          name: this.name,
+          requestedPermission: level,
+          version: '0.1.0',
+        });
+      }
+      this._appendEvent({ event: 'perm-changed', roomId, level });
+    }
   }
 
   // -- helpers -------------------------------------------------------------

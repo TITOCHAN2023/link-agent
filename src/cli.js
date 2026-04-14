@@ -109,6 +109,8 @@ const bridgeCmd = program
   .option('--on-connect <cmd>', 'Shell command on peer connect (use {peer})')
   .option('--on-message <cmd>', 'Shell command on message (use {from}, {type})')
   .option('--on-disconnect <cmd>', 'Shell command on disconnect (use {reason})')
+  .option('--tg-token <token>', 'Telegram bot token for notifications')
+  .option('--tg-chat <id>', 'Telegram chat ID for notifications')
   .option('--foreground', 'Run in foreground (don\'t daemonize)')
   .option('--daemon-child', '(internal) actual bridge process')
   .action(async (opts) => {
@@ -122,6 +124,8 @@ const bridgeCmd = program
       onConnect: opts.onConnect,
       onMessage: opts.onMessage,
       onDisconnect: opts.onDisconnect,
+      tgToken: opts.tgToken,
+      tgChatId: opts.tgChat,
     };
 
     // ── If this is the daemon child, run the bridge ──
