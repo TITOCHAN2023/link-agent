@@ -10,11 +10,14 @@ ClawLink bridge 收到 P2P 消息后，agent 不知道。需要让消息**主动
 MyClaw 发消息
     ↓ WebRTC DataChannel (P2P)
 Bridge (:7654) 收到消息
+    ├── 自动写入 ~/.claw-link/{roomId}/inbox.jsonl (JSONL, source of truth)
     ├── on-message hook → curl webhook (带 roomId) → Hermes Agent 被唤醒 → Telegram 推送给你
-    └── long-poll 循环  → /tmp/clawlink_msgs_{roomId}.json (按房间分开存档)
+    └── long-poll /recv?room={roomId} (备选通道)
 ```
 
-> **多房间注意**：所有消息都通过 `{roomId}` 区分房间。webhook payload、消息存档、agent 回复都必须带上 roomId，否则多房间时消息会混淆。
+> **多房间注意**：所有消息都通过 `{roomId}` 区分房间。webhook payload、inbox 路径、agent 回复都必须带上 roomId，否则多房间时消息会混淆。
+>
+> **inbox 路径**：`~/.claw-link/{roomId}/inbox.jsonl` — JSONL 格式（每行一个 JSON），bridge 自动维护，webhook 脚本直接读取，不需要额外的存档文件。
 
 ## 步骤
 
@@ -52,7 +55,7 @@ curl http://127.0.0.1:8644/health
 {
   "clawlink-msg": {
     "secret": "你的HMAC密钥",
-    "prompt": "ClawLink P2P 消息到达。\n1. 从 payload 中读取 roomId 和 content\n2. 读对应房间的存档: /tmp/clawlink_msgs_{roomId}.json 获取上下文\n3. 理解意图并回复: curl -X POST http://127.0.0.1:7654/send -d '{\"roomId\":\"{roomId}\",\"type\":\"chat\",\"content\":\"你的回复\"}'\n4. 通过 Telegram 告诉鹏哥",
+    "prompt": "ClawLink P2P 消息到达。\n1. 从 payload 中读取 roomId 和 content\n2. 读 inbox 获取上下文: cat ~/.claw-link/{roomId}/inbox.jsonl | tail -10\n3. 理解意图并回复: curl -X POST http://127.0.0.1:7654/send -d '{\"roomId\":\"{roomId}\",\"type\":\"chat\",\"content\":\"你的回复\"}'\n4. 通过 Telegram 告诉鹏哥",
     "deliver": "telegram",
     "description": "ClawLink P2P 推送"
   }
@@ -76,20 +79,34 @@ TYPE="${2:-chat}"
 ID="${3:-}"
 ROOM_ID="${4:-}"
 
-# 按房间 ID 分文件存档
-MSG_FILE="/tmp/clawlink_msgs_${ROOM_ID}.json"
+# 直接读 bridge 的 inbox（source of truth）
+# 路径: ~/.claw-link/{roomId}/inbox.jsonl（JSONL 格式，一行一条 JSON）
+INBOX="${HOME}/.claw-link/${ROOM_ID}/inbox.jsonl"
 
-# 构造 payload（含最新消息 + roomId）
+# 构造 payload（从 inbox 读最近消息 + roomId）
 PAYLOAD=$(python3 -c "
 import json, datetime, os
+
 room_id = '$ROOM_ID'
-msg_file = '$MSG_FILE'
+inbox = '$INBOX'
+
+# 读 JSONL（每行一个 JSON 对象）
 msgs = []
-if os.path.exists(msg_file):
-    try: msgs = json.load(open(msg_file))
-    except: pass
+if os.path.exists(inbox):
+    with open(inbox) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msgs.append(json.loads(line))
+            except:
+                pass
+
 last = msgs[-1] if msgs else {}
-content = last.get('payload',{}).get('content','') if isinstance(last.get('payload'), dict) else ''
+payload = last.get('payload', {})
+content = payload.get('content', '') if isinstance(payload, dict) else ''
+
 print(json.dumps({
     'roomId': room_id,
     'from': '$FROM', 'type': '$TYPE', 'id': '$ID',
@@ -100,14 +117,16 @@ print(json.dumps({
 ")
 
 # HMAC-SHA256 签名（必须！否则返回 401）
-SIG=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
+SIG=$(echo -n "\$PAYLOAD" | openssl dgst -sha256 -hmac "\$SECRET" | awk '{print \$2}')
 
 # 调用 webhook
-curl -s -X POST "$WEBHOOK_URL" \
+curl -s -X POST "\$WEBHOOK_URL" \
   -H "Content-Type: application/json" \
-  -H "X-Webhook-Signature: $SIG" \
-  -d "$PAYLOAD"
+  -H "X-Webhook-Signature: \$SIG" \
+  -d "\$PAYLOAD"
 ```
+
+> **inbox 路径**：bridge 自动将所有收到的消息写入 `~/.claw-link/{roomId}/inbox.jsonl`（JSONL 格式）。webhook 脚本直接读这个文件，不需要维护单独的存档。
 
 ```bash
 chmod +x /tmp/clawlink_webhook.sh
@@ -187,7 +206,7 @@ done
 | `/tmp/clawlink_webhook.sh` | bridge hook → 签名 webhook 调用（带 roomId） |
 | `/tmp/clawlink_receiver.sh` | （可选）按房间 long-poll 备份通道 |
 | `/tmp/clawlink_live.log` | 人类可读的消息日志（含房间标识） |
-| `/tmp/clawlink_msgs_{roomId}.json` | 按房间分开的 JSON 消息存档 |
+| `~/.claw-link/{roomId}/inbox.jsonl` | bridge 自动维护的消息存档（JSONL，source of truth） |
 
 ---
 
