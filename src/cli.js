@@ -1,5 +1,6 @@
 'use strict';
 
+const http = require('http');
 const { Command } = require('commander');
 const chalk = require('chalk');
 const { SignalingServer } = require('./server');
@@ -8,6 +9,36 @@ const { ClawAgent } = require('./agent');
 const { describe } = require('./permissions');
 const { generateInvite } = require('./invite');
 const { loadRC, resolveAlias } = require('./rc');
+
+/** HTTP request to a running bridge. Returns parsed JSON. */
+function bridgeHttp(method, path, body, port) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      hostname: '127.0.0.1', port, path, method,
+      headers: { 'Content-Type': 'application/json' },
+    }, (res) => {
+      let data = '';
+      res.on('data', (c) => data += c);
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); } catch { resolve(data); }
+      });
+    });
+    req.on('error', reject);
+    if (body) req.write(JSON.stringify(body));
+    req.end();
+  });
+}
+
+/** Run a bridge subcommand: request, print JSON, exit. */
+async function bridgeRun(fn) {
+  try {
+    const res = await fn();
+    console.log(JSON.stringify(res));
+  } catch (e) {
+    console.log(JSON.stringify({ error: e.message }));
+    process.exit(1);
+  }
+}
 
 const rc = loadRC();
 
@@ -194,6 +225,106 @@ bridgeCmd
     } else {
       console.log(JSON.stringify({ error: 'Provide PID or --kill-port' }));
     }
+  });
+
+// ── bridge connect ──────────────────────────────────────────
+bridgeCmd
+  .command('connect [room-id]')
+  .description('Connect to a room via running bridge')
+  .option('-p, --port <port>', 'Bridge HTTP port', rc.port ? String(rc.port) : '7654')
+  .action((roomId, opts) => {
+    const port = parseInt(opts.port, 10);
+    bridgeRun(() => bridgeHttp('POST', '/connect', roomId ? { roomId } : {}, port));
+  });
+
+// ── bridge send ─────────────────────────────────────────────
+bridgeCmd
+  .command('send [message]')
+  .description('Send a message via bridge (default type: chat)')
+  .option('-p, --port <port>', 'Bridge HTTP port', rc.port ? String(rc.port) : '7654')
+  .option('-r, --room <roomId>', 'Target room ID')
+  .option('-t, --type <type>', 'Message type: chat|task|query|file|result', 'chat')
+  .option('--desc <text>', 'Task description (type=task)')
+  .option('--data <json>', 'JSON data payload (type=task|result)')
+  .option('--question <text>', 'Question text (type=query)')
+  .option('--file-name <name>', 'File name (type=file)')
+  .option('--reply-to <id>', 'Reply to message ID')
+  .action((message, opts) => {
+    const port = parseInt(opts.port, 10);
+    const body = { type: opts.type };
+    if (opts.room) body.roomId = opts.room;
+    if (opts.replyTo) body.replyTo = opts.replyTo;
+    switch (opts.type) {
+      case 'chat':
+        body.content = message || '';
+        break;
+      case 'task':
+        body.description = opts.desc || message || '';
+        if (opts.data) try { body.data = JSON.parse(opts.data); } catch { body.data = opts.data; }
+        break;
+      case 'query':
+        body.question = opts.question || message || '';
+        break;
+      case 'file':
+        body.name = opts.fileName || '';
+        body.content = message || '';
+        break;
+      case 'result':
+        if (opts.data) try { body.data = JSON.parse(opts.data); } catch { body.data = opts.data; }
+        break;
+      default:
+        body.content = message || '';
+    }
+    bridgeRun(() => bridgeHttp('POST', '/send', body, port));
+  });
+
+// ── bridge recv ─────────────────────────────────────────────
+bridgeCmd
+  .command('recv')
+  .description('Receive messages from bridge')
+  .option('-p, --port <port>', 'Bridge HTTP port', rc.port ? String(rc.port) : '7654')
+  .option('-r, --room <roomId>', 'Target room ID')
+  .option('-w, --wait <seconds>', 'Long-poll timeout in seconds', '0')
+  .option('-a, --all', 'Read all messages from inbox')
+  .action((opts) => {
+    const port = parseInt(opts.port, 10);
+    const params = [];
+    if (opts.room) params.push(`room=${opts.room}`);
+    if (opts.all) params.push('all=1');
+    params.push(`wait=${opts.wait}`);
+    const path = '/recv?' + params.join('&');
+    bridgeRun(() => bridgeHttp('GET', path, null, port));
+  });
+
+// ── bridge status ───────────────────────────────────────────
+bridgeCmd
+  .command('status')
+  .description('Check bridge/room status')
+  .option('-p, --port <port>', 'Bridge HTTP port', rc.port ? String(rc.port) : '7654')
+  .option('-r, --room <roomId>', 'Target room ID')
+  .action((opts) => {
+    const port = parseInt(opts.port, 10);
+    const path = opts.room ? `/status?room=${opts.room}` : '/status';
+    bridgeRun(() => bridgeHttp('GET', path, null, port));
+  });
+
+// ── bridge rooms ────────────────────────────────────────────
+bridgeCmd
+  .command('rooms')
+  .description('List all active rooms')
+  .option('-p, --port <port>', 'Bridge HTTP port', rc.port ? String(rc.port) : '7654')
+  .action((opts) => {
+    bridgeRun(() => bridgeHttp('GET', '/rooms', null, parseInt(opts.port, 10)));
+  });
+
+// ── bridge close ────────────────────────────────────────────
+bridgeCmd
+  .command('close [room-id]')
+  .description('Close a room (or all rooms if omitted)')
+  .option('-p, --port <port>', 'Bridge HTTP port', rc.port ? String(rc.port) : '7654')
+  .action((roomId, opts) => {
+    const port = parseInt(opts.port, 10);
+    bridgeRun(() => bridgeHttp('POST', '/close', roomId ? { roomId } : {}, port));
   });
 
 // ── ping ───────────────────────────────────────────────────
