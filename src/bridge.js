@@ -103,8 +103,7 @@ class RoomState {
  * ClawBridge — multi-room HTTP bridge for serial agents.
  *
  * HTTP API (all endpoints accept roomId to target a specific room):
- *   POST /create  {roomId?}             → create room
- *   POST /join    {roomId}              → join room
+ *   POST /connect {roomId?}             → connect to room (create if new, join if exists)
  *   POST /send    {roomId, type, ...}   → send message
  *   GET  /recv?room=X&wait=N           → poll messages
  *   GET  /status?room=X                → room status (omit room for all)
@@ -415,8 +414,8 @@ class ClawBridge {
     res.setHeader('Content-Type', 'application/json');
 
     try {
-      // POST /create {roomId?}
-      if (method === 'POST' && pathname === '/create') {
+      // POST /connect {roomId?} — connect to room (create if new, join if exists)
+      if (method === 'POST' && pathname === '/connect') {
         const body = await this._readBody(req);
         const resolvedRoom = this._resolveAlias(body.roomId);
         const pendingKey = resolvedRoom || '_pending_' + Date.now();
@@ -426,14 +425,13 @@ class ClawBridge {
         try {
           await this._waitFor(() => room.transport && room.transport.roomId, 10000);
         } catch {
-          // Timeout — clean up the dangling room
           this._destroyRoom(room);
           this.rooms.delete(pendingKey);
           return this._json(res, 504, { error: 'Signaling timeout' });
         }
         const actualId = room.transport.roomId;
         // Re-register under actual room ID if it was auto-generated
-        if (!body.roomId && actualId) {
+        if (!resolvedRoom && actualId) {
           this.rooms.delete(pendingKey);
           room.roomId = actualId;
           room.dataDir = path.join(this._baseDir, actualId);
@@ -445,17 +443,6 @@ class ClawBridge {
         const invite = generateInvite(actualId, { signal: this.signalingUrl, creator: this.name, perm: this.permission });
         const invitePath = writeInvite(invite, room.dataDir);
         return this._json(res, 200, { roomId: actualId, inbox: room.inboxPath, invite: invitePath });
-      }
-
-      // POST /join {roomId}
-      if (method === 'POST' && pathname === '/join') {
-        const body = await this._readBody(req);
-        if (!body.roomId) return this._json(res, 400, { error: 'roomId required' });
-        const rid = this._resolveAlias(body.roomId);
-        const room = this._initRoom(rid);
-        this._connectRoom(room, rid);
-        await this._waitFor(() => room.transport && room.transport.roomId, 10000);
-        return this._json(res, 200, { roomId: rid, inbox: room.inboxPath, status: 'waiting-for-peer' });
       }
 
       // GET /rooms
@@ -554,6 +541,26 @@ class ClawBridge {
           for (const [id] of this.rooms) this._closeRoom(id);
         }
         return this._json(res, 200, { ok: true });
+      }
+
+      // GET /debug?room=X — WebRTC internals (ICE candidate pair, state, bytes)
+      if (method === 'GET' && pathname === '/debug') {
+        const rid = this._resolveAlias(url.searchParams.get('room'));
+        const room = rid ? this.rooms.get(rid) : this.rooms.values().next().value;
+        if (!room || !room.transport) return this._json(res, 200, { error: 'No active room' });
+        const pc = room.transport._pc;
+        const info = { roomId: room.roomId, peer: room.peerName };
+        if (pc) {
+          try { info.iceState = pc.iceState(); } catch {}
+          try { info.state = pc.state(); } catch {}
+          try { info.gatheringState = pc.gatheringState(); } catch {}
+          try { info.signalingState = pc.signalingState(); } catch {}
+          try { info.selectedCandidatePair = pc.getSelectedCandidatePair(); } catch {}
+          try { info.bytesSent = pc.bytesSent(); } catch {}
+          try { info.bytesReceived = pc.bytesReceived(); } catch {}
+          try { info.rtt = pc.rtt(); } catch {}
+        }
+        return this._json(res, 200, info);
       }
 
       // GET /health

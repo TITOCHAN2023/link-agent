@@ -37,13 +37,13 @@ Not all agents are equal. claw-link provides three integration modes matched to 
 | Pipe stdin/stdout in real-time | no | yes | yes |
 | `require()` Node.js modules | no | no | yes |
 | **Examples** | Simple ReAct agent, tool-call-only agent, most MCP clients | Claude Code, Cursor, Cline, aider | Custom Node.js agent, OpenClaw runtime |
-| **Use mode** | `claw-link bridge` | `claw-link create --json` | `require('claw-link')` |
+| **Use mode** | `claw-link bridge` | `claw-link connect --json` | `require('claw-link')` |
 
 ---
 
 ## L1: Bridge Mode (serial agents)
 
-**Problem**: L1 agent runs `claw-link create`, the process never exits, agent freezes.
+**Problem**: L1 agent runs `claw-link connect`, the process never exits, agent freezes.
 
 **Solution**: The bridge runs in the background. Agent talks to it via one-shot HTTP calls. Messages queue up and wait. Hooks wake the agent when something arrives.
 
@@ -58,20 +58,20 @@ claw-link bridge --port 7654 --name MyClaw --perm helper \
 ### Full workflow (agent runs these sequentially)
 
 ```bash
-# 1. Create a room (auto-generated ID)
-curl -s -X POST http://127.0.0.1:7654/create
-# → {"roomId":"a1b2c3d4"}
+# 1. Connect to a room (auto-generated ID if omitted)
+curl -s -X POST http://127.0.0.1:7654/connect
+# → {"roomId":"a1b2c3d4","inbox":"...","invite":"..."}
 
-# Or with a custom room ID:
-curl -s -X POST http://127.0.0.1:7654/create -d '{"roomId":"my-room"}'
-# → {"roomId":"my-room"}
+# Or with a custom/known room ID:
+curl -s -X POST http://127.0.0.1:7654/connect -d '{"roomId":"my-room"}'
+# → {"roomId":"my-room","inbox":"...","invite":"..."}
 
 # 2. Share roomId SECURELY with the other agent (private channel only!)
 #    The Room ID IS the auth token — anyone who has it can join.
 
-# 3. Other agent joins on their bridge:
-curl -s -X POST http://127.0.0.1:7654/join -d '{"roomId":"a1b2c3d4"}'
-# → {"peer":"PeerClaw","permission":"helper","roomId":"a1b2c3d4"}
+# 3. Other agent connects on their bridge (same command):
+curl -s -X POST http://127.0.0.1:7654/connect -d '{"roomId":"a1b2c3d4"}'
+# → {"roomId":"a1b2c3d4","inbox":"...","invite":"..."}
 
 # 4. Send a message
 curl -s -X POST http://127.0.0.1:7654/send \
@@ -213,8 +213,7 @@ Check pending count: `curl -s http://127.0.0.1:7654/status` → `{"pending": 0, 
 
 | Method | Path | Body | Returns |
 |--------|------|------|---------|
-| POST | `/create` | `{roomId?}` | `{roomId, invite}` |
-| POST | `/join` | `{roomId}` | `{peer, permission, roomId}` |
+| POST | `/connect` | `{roomId?}` | `{roomId, inbox, invite}` |
 | GET | `/status` | — | `{connected, roomId, peer, permission, inbox}` |
 | POST | `/send` | `{type, ...}` | `{ok, id}` |
 | GET | `/recv` | — | `[messages]` |
@@ -228,18 +227,14 @@ Check pending count: `curl -s http://127.0.0.1:7654/status` → `{"pending": 0, 
 
 Agent runs a background process, reads stdout line by line, writes to stdin.
 
-### Create room (first peer)
+### Connect (both peers use the same command)
 
 ```bash
-claw-link create --name MyClaw --perm helper --json
-# Or with custom room ID:
-claw-link create --room my-room --name MyClaw --perm helper --json
-```
+# First peer — omit room-id to auto-generate:
+claw-link connect --name MyClaw --perm helper --json
 
-### Join room (second peer)
-
-```bash
-claw-link join a1b2c3d4 --name PeerClaw --perm helper --json
+# Second peer — provide the room-id:
+claw-link connect a1b2c3d4 --name PeerClaw --perm helper --json
 ```
 
 ### stdout events (read these)
@@ -401,8 +396,8 @@ Place a `.clawlinkrc` file (JSON) in your project directory or home directory. C
 
 **Room aliases**: use short names in place of room IDs everywhere — CLI, HTTP API, even `curl`:
 ```bash
-claw-link join stable              # resolves to "my-stable-room-id"
-curl -X POST .../join -d '{"roomId":"dev"}'   # resolves to "my-dev-room-id"
+claw-link connect stable              # resolves to "my-stable-room-id"
+curl -X POST .../connect -d '{"roomId":"dev"}'   # resolves to "my-dev-room-id"
 ```
 
 **Priority**: CLI flags > environment variables > .clawlinkrc > defaults
@@ -415,8 +410,8 @@ curl -X POST .../join -d '{"roomId":"dev"}'   # resolves to "my-dev-room-id"
 git clone https://github.com/TITOCHAN2023/ClawLink.git
 cd ClawLink && npm install
 
-claw-link create --name ClawA          # Create room (interactive)
-claw-link join <room-id> --name ClawB  # Join room (interactive)
+claw-link connect --name ClawA          # Create room (interactive)
+claw-link connect <room-id> --name ClawB  # Join room (interactive)
 claw-link server --port 8765           # Local signaling server
 claw-link ping wss://ginfo.cc/signal/  # Test connectivity
 ```
@@ -469,7 +464,7 @@ src/
   transport.js      ClawTransport — P2P EventEmitter core (L3)
   protocol.js       Message envelope + type constructors
   client.js         Interactive terminal UI (humans)
-  cli.js            CLI entry (create/join/bridge/server/ping)
+  cli.js            CLI entry (connect/bridge/server/ping)
   server.js         Built-in JS signaling server (local dev)
   session.js        Session state machine
   permissions.js    Permission negotiation + privacy filter

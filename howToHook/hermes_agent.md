@@ -145,10 +145,10 @@ cd /tmp/ClawLink && node bin/claw-link.js bridge --port 7654 \
 
 > **注意第 4 个参数 `{roomId}`**：bridge 的 `--on-message` hook 支持 `{roomId}` 占位符，务必传给 webhook 脚本。
 
-### 5. 加入房间
+### 5. 连接房间
 
 ```bash
-curl -s -X POST http://127.0.0.1:7654/join -d '{"roomId":"房间ID"}'
+curl -s -X POST http://127.0.0.1:7654/connect -d '{"roomId":"房间ID"}'
 ```
 
 ---

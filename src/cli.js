@@ -20,52 +20,36 @@ function makeClient(opts, extra = {}) {
   return opts.json ? new ClawAgent(args) : new ClawClient(args);
 }
 
-// ── create ─────────────────────────────────────────────────
+// ── connect ───────────────────────────────────────────────
 program
-  .command('create')
-  .description('Create a room and wait for a peer to join')
-  .option('-r, --room <id>', 'Custom room ID (default: server-generated)')
+  .command('connect [room-id]')
+  .description('Connect to a room (omit room-id to create a new room)')
   .option('-s, --signal <url>', 'Signaling server URL', rc.signalingUrl || 'wss://ginfo.cc/signal/')
-  .option('-n, --name <name>', 'Your Claw name', rc.name || 'ClawA')
-  .option('--perm <level>', 'Permission level: intimate | helper | chat', rc.permission || 'helper')
-  .option('--json', 'Machine-readable JSON lines mode (for agents)')
-  .action(async (opts) => {
-    const roomId = resolveAlias(rc, opts.room) || opts.room;
-    const client = makeClient(opts, roomId ? { room: roomId } : {});
-
-    if (!opts.json) {
-      console.log(chalk.bold('\n🔗 claw-link — Create Room\n'));
-      client.transport.on('room', (roomId) => {
-        console.log(chalk.bold.cyan(`📌 Room ID: ${roomId}\n`));
-        const invite = generateInvite(roomId, { signal: opts.signal, creator: opts.name, perm: opts.perm });
-        console.log(chalk.gray('─'.repeat(60)));
-        console.log(chalk.white('Copy the following invite and send it to the other peer:\n'));
-        console.log(invite);
-        console.log(chalk.gray('\n' + '─'.repeat(60)));
-        console.log(chalk.gray('\nWaiting for peer to join...\n'));
-      });
-    }
-
-    client.start();
-    process.on('SIGINT', () => { client.transport.close(); process.exit(0); });
-  });
-
-// ── join ───────────────────────────────────────────────────
-program
-  .command('join <room-id>')
-  .description('Join an existing room by room ID')
-  .option('-s, --signal <url>', 'Signaling server URL', rc.signalingUrl || 'wss://ginfo.cc/signal/')
-  .option('-n, --name <name>', 'Your Claw name', rc.name || 'ClawB')
+  .option('-n, --name <name>', 'Your Claw name', rc.name || 'Claw')
   .option('--perm <level>', 'Permission level: intimate | helper | chat', rc.permission || 'helper')
   .option('--json', 'Machine-readable JSON lines mode (for agents)')
   .action(async (rawRoomId, opts) => {
-    const roomId = resolveAlias(rc, rawRoomId);
+    const roomId = rawRoomId ? resolveAlias(rc, rawRoomId) : undefined;
+    const client = makeClient(opts, roomId ? { room: roomId } : {});
+
     if (!opts.json) {
-      console.log(chalk.bold('\n🔗 claw-link — Join Room\n'));
-      console.log(chalk.gray(`Room: ${roomId} | Permission: ${opts.perm.toUpperCase()}\n`));
+      console.log(chalk.bold('\n🔗 claw-link — Connect\n'));
+      if (roomId) {
+        console.log(chalk.gray(`Room: ${roomId} | Permission: ${opts.perm.toUpperCase()}\n`));
+      }
+      client.transport.on('room', (id) => {
+        console.log(chalk.bold.cyan(`📌 Room ID: ${id}\n`));
+        if (!roomId) {
+          const invite = generateInvite(id, { signal: opts.signal, creator: opts.name, perm: opts.perm });
+          console.log(chalk.gray('─'.repeat(60)));
+          console.log(chalk.white('Share this Room ID with the other peer (keep it secret!):\n'));
+          console.log(invite);
+          console.log(chalk.gray('\n' + '─'.repeat(60)));
+        }
+        console.log(chalk.gray('\nWaiting for peer...\n'));
+      });
     }
 
-    const client = makeClient(opts, { room: roomId });
     client.start();
     process.on('SIGINT', () => { client.transport.close(); process.exit(0); });
   });
@@ -93,7 +77,7 @@ program
     if (!opts.json) {
       client.transport.on('room', (id) => {
         console.log(chalk.bold.cyan(`📌 Room: ${id}`));
-        console.log(chalk.cyan(`   claw-link join ${id} -s ws://<IP>:${port}\n`));
+        console.log(chalk.cyan(`   claw-link connect ${id} -s ws://<IP>:${port}\n`));
       });
     }
     client.start();

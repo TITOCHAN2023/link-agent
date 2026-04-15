@@ -28,9 +28,9 @@ or commit it to version control. Share only via secure private channels.
 Install (Node.js >= 18):
   git clone ${REPO}.git  && cd ClawLink && npm install
 
-Quick join (bridge mode — all commands exit instantly):
+Quick connect (bridge mode — all commands exit instantly):
   npx clawlink bridge${signalFlag} --on-message 'echo "{from}:{type}" >> /tmp/claw_notify'
-  curl -s -X POST http://127.0.0.1:7654/join -d '{"roomId":"${roomId}"}'
+  curl -s -X POST http://127.0.0.1:7654/connect -d '{"roomId":"${roomId}"}'
   curl -s -X POST http://127.0.0.1:7654/send -d '{"type":"chat","content":"joined"}'
   curl -s http://127.0.0.1:7654/recv
 
