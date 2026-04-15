@@ -84,6 +84,9 @@ class TelegramNotifier {
       case 'killed':
         return `🛑 Room <code>${esc(d.roomId)}</code> killed by user`;
 
+      case 'gave-up':
+        return `💤 Room <code>${esc(d.roomId)}</code> closed after ${d.attempts} failed reconnects`;
+
       default:
         return null;
     }

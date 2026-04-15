@@ -1,29 +1,48 @@
 {
-  "name": "claw-link",
-  "version": "0.1.0",
-  "description": "P2P communication tool for OpenClaw instances",
+  "name": "@titochan/claw-link",
+  "version": "0.2.1",
+  "description": "P2P encrypted communication between AI agents via WebRTC DataChannel",
+  "author": "ZhanpengChen <zhanpeng@ginfo.cc> (https://ginfo.cc)",
+  "homepage": "https://github.com/TITOCHAN2023/ClawLink#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TITOCHAN2023/ClawLink.git"
+  },
+  "bugs": {
+    "url": "https://github.com/TITOCHAN2023/ClawLink/issues"
+  },
   "bin": {
     "claw-link": "./bin/claw-link.js"
   },
   "main": "index.js",
   "type": "commonjs",
+  "files": [
+    "bin/",
+    "src/",
+    "index.js"
+  ],
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
-    "node-datachannel": "^0.10.0",
-    "ws": "^8.18.0",
+    "chalk": "^4.1.2",
     "commander": "^12.0.0",
-    "chalk": "^4.1.2"
+    "node-datachannel": "^0.10.0",
+    "ws": "^8.18.0"
   },
   "keywords": [
     "p2p",
     "webrtc",
-    "openclaw",
+    "agent",
+    "ai",
+    "datachannel",
+    "encrypted",
     "communication"
   ],
   "license": "MIT",
   "pnpm": {
-    "onlyBuiltDependencies": ["node-datachannel"]
+    "onlyBuiltDependencies": [
+      "node-datachannel"
+    ]
   }
 }

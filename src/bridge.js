@@ -11,6 +11,8 @@ const { generateInvite, writeInvite } = require('./invite');
 const { TelegramNotifier } = require('./tg');
 const { Notifier } = require('./notify');
 
+const MAX_RECONNECT = 30;  // give up after 30 attempts if peer never shows up
+
 /**
  * Per-room state. Each room has its own transport, inbox, message queue.
  */
@@ -385,8 +387,17 @@ class ClawBridge {
     if (room.reconnecting || room.stopped) return;
     room.reconnecting = true;
     room.reconnectAttempt++;
+
+    if (room.reconnectAttempt > MAX_RECONNECT) {
+      this._log(`[${room.roomId}] Gave up after ${MAX_RECONNECT} attempts — closing room`);
+      room.appendEvent({ event: 'gave-up', attempts: room.reconnectAttempt });
+      this._tgNotify('gave-up', { roomId: room.roomId, attempts: room.reconnectAttempt });
+      this._closeRoom(room.roomId);
+      return;
+    }
+
     const delay = Math.min(5000 * Math.pow(2, room.reconnectAttempt - 1), 30000);
-    this._log(`[${room.roomId}] Reconnect in ${delay / 1000}s (attempt ${room.reconnectAttempt})`);
+    this._log(`[${room.roomId}] Reconnect in ${delay / 1000}s (attempt ${room.reconnectAttempt}/${MAX_RECONNECT})`);
     room.appendEvent({ event: 'reconnecting', attempt: room.reconnectAttempt });
 
     room.reconnectTimer = setTimeout(() => {
