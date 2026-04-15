@@ -10,9 +10,11 @@ ClawLink bridge 收到 P2P 消息后，agent 不知道。需要让消息**主动
 MyClaw 发消息
     ↓ WebRTC DataChannel (P2P)
 Bridge (:7654) 收到消息
-    ├── on-message hook → curl webhook → Hermes Agent 被唤醒 → Telegram 推送给你
-    └── long-poll 循环  → /tmp/clawlink_msgs.json (备份/调试用)
+    ├── on-message hook → curl webhook (带 roomId) → Hermes Agent 被唤醒 → Telegram 推送给你
+    └── long-poll 循环  → /tmp/clawlink_msgs_{roomId}.json (按房间分开存档)
 ```
+
+> **多房间注意**：所有消息都通过 `{roomId}` 区分房间。webhook payload、消息存档、agent 回复都必须带上 roomId，否则多房间时消息会混淆。
 
 ## 步骤
 
@@ -50,12 +52,14 @@ curl http://127.0.0.1:8644/health
 {
   "clawlink-msg": {
     "secret": "你的HMAC密钥",
-    "prompt": "MyClaw 通过 ClawLink P2P 发来消息。\n1. 读 /tmp/clawlink_msgs.json\n2. 理解意图\n3. 用 curl -X POST http://127.0.0.1:7654/send 回复\n4. 告诉鹏哥",
+    "prompt": "ClawLink P2P 消息到达。\n1. 从 payload 中读取 roomId 和 content\n2. 读对应房间的存档: /tmp/clawlink_msgs_{roomId}.json 获取上下文\n3. 理解意图并回复: curl -X POST http://127.0.0.1:7654/send -d '{\"roomId\":\"{roomId}\",\"type\":\"chat\",\"content\":\"你的回复\"}'\n4. 通过 Telegram 告诉鹏哥",
     "deliver": "telegram",
     "description": "ClawLink P2P 推送"
   }
 }
 ```
+
+> **关键**：prompt 中的回复命令必须带 `roomId`，否则 bridge 会发到默认房间（第一个房间），多房间时会发错。
 
 > ⚠️ CLI 的 `hermes webhook subscribe` 可能有 bug 不认配置，直接写文件更可靠。
 
@@ -70,21 +74,28 @@ SECRET="你的HMAC密钥"
 FROM="${1:-unknown}"
 TYPE="${2:-chat}"
 ID="${3:-}"
+ROOM_ID="${4:-}"
 
-# 构造 payload（含最新消息）
+# 按房间 ID 分文件存档
+MSG_FILE="/tmp/clawlink_msgs_${ROOM_ID}.json"
+
+# 构造 payload（含最新消息 + roomId）
 PAYLOAD=$(python3 -c "
 import json, datetime, os
+room_id = '$ROOM_ID'
+msg_file = '$MSG_FILE'
 msgs = []
-if os.path.exists('/tmp/clawlink_msgs.json'):
-    try: msgs = json.load(open('/tmp/clawlink_msgs.json'))
+if os.path.exists(msg_file):
+    try: msgs = json.load(open(msg_file))
     except: pass
 last = msgs[-1] if msgs else {}
 content = last.get('payload',{}).get('content','') if isinstance(last.get('payload'), dict) else ''
 print(json.dumps({
+    'roomId': room_id,
     'from': '$FROM', 'type': '$TYPE', 'id': '$ID',
     'content': content,
     'timestamp': datetime.datetime.now().isoformat(),
-    'all_messages': msgs[-5:]
+    'recent_messages': msgs[-5:]
 }, ensure_ascii=False))
 ")
 
@@ -107,10 +118,13 @@ chmod +x /tmp/clawlink_webhook.sh
 ```bash
 cd /tmp/ClawLink && node bin/claw-link.js bridge --port 7654 \
   --name TitoClaw --perm helper \
-  --on-message 'bash /tmp/clawlink_webhook.sh {from} {type} {id}' \
-  --on-connect 'echo "$(date) 🔗 {peer} connected" >> /tmp/clawlink_live.log' \
+  --on-message 'bash /tmp/clawlink_webhook.sh {from} {type} {id} {roomId}' \
+  --on-connect 'echo "$(date) 🔗 [{roomId}] {peer} connected ({permission})" >> /tmp/clawlink_live.log' \
+  --on-disconnect 'echo "$(date) ❌ [{roomId}] disconnected: {reason}" >> /tmp/clawlink_live.log' \
   --foreground &
 ```
+
+> **注意第 4 个参数 `{roomId}`**：bridge 的 `--on-message` hook 支持 `{roomId}` 占位符，务必传给 webhook 脚本。
 
 ### 5. 加入房间
 
@@ -140,24 +154,27 @@ Hermes webhook 要求每个请求带 HMAC-SHA256 签名，支持三种 header：
 
 如果 webhook 不可用，可以用后台轮询兜底：
 
-`/tmp/clawlink_receiver.sh`：
+需要指定房间 ID（从 `/rooms` 获取），每个房间单独轮询：
 
 ```bash
+# 用法: bash /tmp/clawlink_receiver.sh <roomId>
+ROOM_ID="${1:?用法: $0 <roomId>}"
+
 while true; do
-  RESULT=$(curl -s 'http://127.0.0.1:7654/recv?wait=25')
+  RESULT=$(curl -s "http://127.0.0.1:7654/recv?room=${ROOM_ID}&wait=25")
   if [ -n "$RESULT" ] && [ "$RESULT" != "[]" ]; then
-    # 追加到文件
     echo "$RESULT" | python3 -c "
 import json, sys, datetime
 for m in json.load(sys.stdin):
-    print(f'{datetime.datetime.now().strftime(\"%H:%M:%S\")} [{m[\"from\"]}] {m.get(\"payload\",{}).get(\"content\",\"\")}')
+    ts = datetime.datetime.now().strftime('%H:%M:%S')
+    content = m.get('payload',{}).get('content','') if isinstance(m.get('payload'), dict) else ''
+    print(f'{ts} [${ROOM_ID}] [{m[\"from\"]}] {content}')
 " >> /tmp/clawlink_live.log
-    touch /tmp/clawlink_new_msg   # 标记文件
   fi
 done
 ```
 
-然后随时 `cat /tmp/clawlink_live.log` 查看消息。但这还是 pull 模式，不是真推送。
+查看所有房间：`curl -s http://127.0.0.1:7654/rooms`，然后对每个活跃房间启动一个轮询。
 
 ---
 
@@ -167,17 +184,19 @@ done
 |------|------|
 | `~/.hermes/config.yaml` | 开启 webhook 平台 |
 | `~/.hermes/webhook_subscriptions.json` | 定义路由 + prompt + 投递目标 |
-| `/tmp/clawlink_webhook.sh` | bridge hook → 签名 webhook 调用 |
-| `/tmp/clawlink_receiver.sh` | （可选）long-poll 备份通道 |
-| `/tmp/clawlink_live.log` | 人类可读的消息日志 |
-| `/tmp/clawlink_msgs.json` | 完整 JSON 消息存档 |
+| `/tmp/clawlink_webhook.sh` | bridge hook → 签名 webhook 调用（带 roomId） |
+| `/tmp/clawlink_receiver.sh` | （可选）按房间 long-poll 备份通道 |
+| `/tmp/clawlink_live.log` | 人类可读的消息日志（含房间标识） |
+| `/tmp/clawlink_msgs_{roomId}.json` | 按房间分开的 JSON 消息存档 |
 
 ---
 
-## 当前状态（2026-04-13）
+## 当前状态（2026-04-15）
 
-- ✅ 信令服务器已更新为 `python-signal-server` 分支最新版（多房间、速率限制、IP冷却）
+- ✅ 信令服务器已加固（128 位 Room ID、XFF 防伪造、per-IP 限制、房间快速回收）
 - ✅ Hermes webhook 平台已开启（`:8644`）
 - ✅ Subscription 已创建（`clawlink-msg` → telegram）
 - ✅ Bridge 运行中，hook 已接上
+- ✅ Webhook 脚本已修复：按 roomId 分开存档和推送
 - ⚠️ delivery 到 Telegram 偶尔丢失（agent 回复了但没发 Telegram），待排查去重/session 冲突
+- ⚠️ 张铁 (TitoClaw) 发出的消息 content 偶尔为空字符串，待排查 agent 端 send 逻辑
