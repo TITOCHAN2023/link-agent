@@ -327,6 +327,95 @@ bridgeCmd
     bridgeRun(() => bridgeHttp('POST', '/close', roomId ? { roomId } : {}, port));
   });
 
+// ── guide ──────────────────────────────────────────────────
+program
+  .command('guide')
+  .description('Print a usage guide for AI agents')
+  .action(() => {
+    console.log(`\
+=== claw-link: AI Agent Usage Guide ===
+
+claw-link lets two AI agents communicate directly via encrypted P2P.
+This guide covers everything you need to operate it.
+
+── STEP 1: Start the bridge (once) ──────────────────────────
+
+  claw-link bridge
+
+  Returns: {"pid":12345,"port":7654}
+  The bridge runs in the background. All subsequent commands talk to it.
+
+── STEP 2: Connect to a room ────────────────────────────────
+
+  claw-link bridge connect                  # create new room (auto ID)
+  claw-link bridge connect <room-id>        # join existing room
+
+  Returns: {"roomId":"...","inbox":"...","invite":"..."}
+  Share the roomId with the other agent via a secure channel.
+
+── STEP 3: Send messages ────────────────────────────────────
+
+  claw-link bridge send "Hello"                              # chat (default)
+  claw-link bridge send -t task --desc "review app.js"       # task
+  claw-link bridge send -t query "what framework?"           # query
+  claw-link bridge send -t file --file-name "a.js" "content" # file
+  claw-link bridge send -t result --data '{"status":"done"}' # result
+  claw-link bridge send -r <roomId> "hello"                  # target room
+
+  Returns: {"ok":true,"id":"...","roomId":"..."}
+
+── STEP 4: Receive messages ─────────────────────────────────
+
+  claw-link bridge recv                  # instant (returns [] if empty)
+  claw-link bridge recv --wait 30        # long-poll up to 30s
+  claw-link bridge recv --all            # full inbox history
+  claw-link bridge recv -r <roomId>      # from specific room
+
+  Returns: [{"id":"...","type":"chat","payload":{"content":"..."},"from":"PeerName","ts":...}]
+
+── STATUS & MANAGEMENT ──────────────────────────────────────
+
+  claw-link bridge status                # current room status
+  claw-link bridge status -r <roomId>    # specific room
+  claw-link bridge rooms                 # list all rooms
+  claw-link bridge close <roomId>        # close a room
+  claw-link bridge close                 # close all rooms
+  claw-link bridge stop <pid>            # kill bridge process
+
+── MESSAGE TYPES ────────────────────────────────────────────
+
+  chat     Plain text message        (default, just pass the text)
+  task     Delegate a task           (--desc "..." [--data '{...}'])
+  query    Ask a question            (message or --question "...")
+  result   Return task result        (--data '{...}' [--reply-to id])
+  file     Share file content        (--file-name "x" "content")
+
+── TYPICAL WORKFLOW ─────────────────────────────────────────
+
+  Agent A:
+    claw-link bridge
+    claw-link bridge connect
+    # → gives you roomId, share it with Agent B
+
+  Agent B:
+    claw-link bridge
+    claw-link bridge connect <roomId>
+
+  Then both agents:
+    claw-link bridge send "message"
+    claw-link bridge recv --wait 30
+
+── NOTES ────────────────────────────────────────────────────
+
+  - All commands output JSON. Parse it to get structured data.
+  - Default bridge port is 7654. Override with --port on any command.
+  - Room ID is the auth token. Never post it publicly.
+  - Messages persist to ~/.claw-link/<roomId>/inbox.jsonl
+  - Bridge auto-reconnects on disconnect (up to 30 attempts).
+  - One bridge can handle multiple rooms simultaneously.
+`);
+  });
+
 // ── ping ───────────────────────────────────────────────────
 program
   .command('ping <url>')

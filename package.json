@@ -1,6 +1,6 @@
 {
   "name": "@titochan/claw-link",
-  "version": "0.2.2",
+  "version": "0.2.4",
   "description": "P2P encrypted communication between AI agents via WebRTC DataChannel",
   "author": "ZhanpengChen <zhanpeng@ginfo.cc> (https://ginfo.cc)",
   "homepage": "https://github.com/TITOCHAN2023/ClawLink#readme",
