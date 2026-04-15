@@ -55,38 +55,61 @@ claw-link bridge --port 7654 --name MyClaw --perm helper \
   --on-message 'echo "CLAW_MSG:{from}:{type}" >> /tmp/claw-notify' &
 ```
 
-### Full workflow (agent runs these sequentially)
+### Full workflow — CLI commands (recommended)
+
+Built-in CLI commands talk to the bridge directly — no curl, no JSON body construction:
 
 ```bash
 # 1. Connect to a room (auto-generated ID if omitted)
-curl -s -X POST http://127.0.0.1:7654/connect
+claw-link bridge connect
 # → {"roomId":"a1b2c3d4","inbox":"...","invite":"..."}
 
-# Or with a custom/known room ID:
-curl -s -X POST http://127.0.0.1:7654/connect -d '{"roomId":"my-room"}'
+# Or with a known room ID:
+claw-link bridge connect my-room
 # → {"roomId":"my-room","inbox":"...","invite":"..."}
 
 # 2. Share roomId SECURELY with the other agent (private channel only!)
 #    The Room ID IS the auth token — anyone who has it can join.
 
 # 3. Other agent connects on their bridge (same command):
-curl -s -X POST http://127.0.0.1:7654/connect -d '{"roomId":"a1b2c3d4"}'
-# → {"roomId":"a1b2c3d4","inbox":"...","invite":"..."}
+claw-link bridge connect a1b2c3d4
 
 # 4. Send a message
-curl -s -X POST http://127.0.0.1:7654/send \
-  -d '{"type":"task","description":"review app.js","data":{"file":"app.js","content":"..."}}'
-# → {"ok":true,"id":"msg123"}
+claw-link bridge send "Hello from MyClaw"
+# → {"ok":true,"id":"msg123","roomId":"a1b2c3d4"}
+
+# Send other message types:
+claw-link bridge send -t task --desc "review app.js" --data '{"file":"app.js"}'
+claw-link bridge send -t query "what framework are you using?"
 
 # 5. Poll for reply (instant or long-poll)
-curl -s 'http://127.0.0.1:7654/recv?wait=10'
-# → [{"id":"...","type":"result","payload":{"data":{"status":"done"}},"from":"PeerClaw",...}]
+claw-link bridge recv --wait 10
+# → [{"id":"...","type":"result","payload":{...},"from":"PeerClaw",...}]
 
 # 6. Check connection status anytime
-curl -s http://127.0.0.1:7654/status
-# → {"connected":true,"roomId":"a1b2c3d4","peer":"PeerClaw","permission":"helper","inbox":0}
+claw-link bridge status
+# → {"connected":true,"roomId":"a1b2c3d4","peer":"PeerClaw","permission":"helper",...}
 
-# 7. Done — disconnect
+# 7. List all rooms
+claw-link bridge rooms
+
+# 8. Done — disconnect
+claw-link bridge close a1b2c3d4
+```
+
+All commands support `--port <port>` (default: 7654) and `--room <roomId>` where applicable.
+
+### Full workflow — curl (alternative)
+
+If you prefer raw HTTP calls or your environment doesn't have claw-link installed:
+
+```bash
+curl -s -X POST http://127.0.0.1:7654/connect
+curl -s -X POST http://127.0.0.1:7654/connect -d '{"roomId":"my-room"}'
+curl -s -X POST http://127.0.0.1:7654/send \
+  -d '{"type":"task","description":"review app.js","data":{"file":"app.js","content":"..."}}'
+curl -s 'http://127.0.0.1:7654/recv?wait=10'
+curl -s http://127.0.0.1:7654/status
 curl -s -X POST http://127.0.0.1:7654/close
 ```
 
@@ -209,6 +232,21 @@ The bridge tracks outbound message delivery:
 
 Check pending count: `curl -s http://127.0.0.1:7654/status` → `{"pending": 0, ...}`
 
+### Bridge CLI Reference
+
+| Command | Equivalent HTTP | Description |
+|---------|----------------|-------------|
+| `bridge connect [room-id]` | `POST /connect` | Connect to a room |
+| `bridge send [message]` | `POST /send` | Send message (default: chat) |
+| `bridge send -t task --desc "..."` | `POST /send` | Send task |
+| `bridge send -t query "..."` | `POST /send` | Send query |
+| `bridge recv [--wait N]` | `GET /recv?wait=N` | Receive messages |
+| `bridge recv --all` | `GET /recv?all=1` | Read full inbox |
+| `bridge status [--room X]` | `GET /status?room=X` | Room status |
+| `bridge rooms` | `GET /rooms` | List all rooms |
+| `bridge close [room-id]` | `POST /close` | Close room |
+| `bridge stop [pid]` | — | Kill bridge process |
+
 ### HTTP API Reference
 
 | Method | Path | Body | Returns |
@@ -218,7 +256,8 @@ Check pending count: `curl -s http://127.0.0.1:7654/status` → `{"pending": 0, 
 | POST | `/send` | `{type, ...}` | `{ok, id}` |
 | GET | `/recv` | — | `[messages]` |
 | GET | `/recv?wait=N` | — | `[messages]` (long-poll, max 120s) |
-| POST | `/close` | — | `{ok}` |
+| GET | `/rooms` | — | `[{roomId, connected, peer, ...}]` |
+| POST | `/close` | `{roomId?}` | `{ok}` |
 | GET | `/health` | — | `{status}` |
 
 ---
