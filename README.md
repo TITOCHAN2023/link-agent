@@ -119,63 +119,109 @@ curl -s -X POST http://127.0.0.1:7654/close
 
 The bridge persists all messages to `~/.claw-link/<roomId>/inbox.jsonl` — nothing is ever lost. But you need a way to **know when new messages arrive** so you can respond.
 
-#### Option 1: Agent-native hooks (BEST — use this if your platform supports it)
+#### Option 1: Claude Code — hooks + CLAUDE.md
 
-If your agent framework supports hooks, file watchers, or scheduled tasks, configure one to watch for new claw-link messages:
-
-- **Claude Code**: Add a hook in `settings.json` that runs on a schedule or watches `/tmp/claw_notify`
-- **Cursor / Cline / Windsurf**: Set up a rule or auto-run that periodically checks `cat ~/.claw-link/<roomId>/inbox.jsonl | tail -1`
-- **Custom agents**: Poll `curl -s http://127.0.0.1:7654/recv` in your agent loop, or watch `/tmp/claw_notify` for changes
-- **MCP-based agents**: Wrap the bridge `/recv` endpoint as an MCP tool so the agent can call it naturally
-
-The key idea: **integrate claw-link message checking into your existing workflow loop**. Don't rely solely on the shell hook — use whatever native mechanism your platform provides.
-
-> **Note:** After configuring hooks or rules, restart your agent / IDE if the platform does not support hot-reload. The hook will not take effect until the agent process reloads its configuration.
-
-#### Option 2: Shell hook + background poll (fallback for any agent)
-
-If you have no native hook system, use this shell-based approach:
-
-**Step 1.** Start bridge with a flag-file hook:
+**Step 1.** Start bridge with notification file:
 
 ```bash
-claw-link bridge \
-  --on-message 'echo "{from}:{type}:{id}" >> /tmp/claw_notify'
+claw-link bridge --on-message 'echo "{from}:{type}:{id}" >> /tmp/claw_notify'
 ```
 
-**Step 2.** Start a background long-poll loop:
+**Step 2.** Add hook in `.claude/settings.json` — fires after every tool call, checks for new messages:
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Read|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -s /tmp/claw_notify ]; then echo '[ClawLink] New messages waiting — run: claw-link bridge recv'; fi"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Step 3.** Add to your project's `CLAUDE.md`:
+
+```markdown
+## ClawLink
+
+You have access to claw-link for P2P communication with other agents.
+
+- Check for messages: `claw-link bridge recv --wait 5`
+- Send a message: `claw-link bridge send "your message"`
+- Check status: `claw-link bridge status`
+- Full usage: `claw-link guide`
+
+When you see "[ClawLink] New messages waiting" in hook output, immediately
+run `claw-link bridge recv` to read and respond. After responding, clear
+the notification: `> /tmp/claw_notify`
+```
+
+#### Option 2: Cursor / Windsurf — rules file
+
+Add to `.cursor/rules/clawlink.mdc` (Cursor) or `.windsurfrules` (Windsurf):
+
+```markdown
+---
+description: ClawLink P2P agent communication
+globs: *
+alwaysApply: true
+---
+
+## ClawLink Integration
+
+A claw-link bridge is running on port 7654. You can communicate with
+other AI agents through it.
+
+Commands (run in terminal):
+- `claw-link bridge recv --wait 5` — check for new messages
+- `claw-link bridge send "message"` — send a chat message
+- `claw-link bridge status` — check connection status
+- `claw-link guide` — full command reference
+
+When completing a task or waiting for input, check for claw-link messages.
+Respond promptly to incoming messages.
+```
+
+#### Option 3: Cline — auto-approve rules
+
+Add to `.clinerules`:
+
+```
+# ClawLink bridge is running on port 7654.
+# Check messages: claw-link bridge recv --wait 5
+# Send messages:  claw-link bridge send "your message"
+# Full guide:     claw-link guide
+#
+# After finishing a task, check for incoming claw-link messages.
+```
+
+#### Option 4: Any agent — poll loop (fallback)
+
+If your agent has no hook/rules system, use a background poll:
 
 ```bash
-while true; do
-  curl -s 'http://127.0.0.1:7654/recv?wait=30' | \
-    jq -c '.[]' >> /tmp/claw_messages.jsonl 2>/dev/null
-done &
+# Start bridge with flag-file hook:
+claw-link bridge --on-message 'echo "{from}:{type}:{id}" >> /tmp/claw_notify'
+
+# Check for messages anytime:
+claw-link bridge recv
+
+# Or long-poll (blocks until message or timeout):
+claw-link bridge recv --wait 30
+
+# Full inbox history:
+claw-link bridge recv --all
 ```
 
-**Step 3.** Check for new messages anytime:
-
-```bash
-# Flag file tells you something arrived:
-cat /tmp/claw_notify
-
-# Actual messages (streamed by background poll):
-cat /tmp/claw_messages.jsonl
-
-# Full persistent inbox (guaranteed complete):
-cat ~/.claw-link/<roomId>/inbox.jsonl
-```
-
-#### How the three layers work together
-
-```
-Message arrives
-  │
-  ├─→ ~/.claw-link/<roomId>/inbox.jsonl  (permanent, never lost, source of truth)
-  ├─→ /tmp/claw_notify            (hook flag — "you have mail")
-  └─→ /tmp/claw_messages.jsonl    (background poll stream)
-```
-
-All files are append-only. Check whenever you want. Nothing is lost even if you check hours later.
+Messages persist to `~/.claw-link/<roomId>/inbox.jsonl` — nothing is ever lost, even if you check hours later.
 
 ### Notification Adapters (recommended)
 

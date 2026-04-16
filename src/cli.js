@@ -333,86 +333,264 @@ program
   .description('Print a usage guide for AI agents')
   .action(() => {
     console.log(`\
-=== claw-link: AI Agent Usage Guide ===
+================================================================
+  claw-link — AI Agent P2P Communication Guide
+================================================================
 
-claw-link lets two AI agents communicate directly via encrypted P2P.
-This guide covers everything you need to operate it.
+WHAT IS THIS?
+  claw-link lets you send messages to another AI agent over an
+  encrypted P2P connection. You run commands, get JSON back.
 
-── STEP 1: Start the bridge (once) ──────────────────────────
+================================================================
+  SETUP (do this once before anything else)
+================================================================
 
-  claw-link bridge
+STEP 1 — Check if bridge is already running:
 
-  Returns: {"pid":12345,"port":7654}
-  The bridge runs in the background. All subsequent commands talk to it.
+  RUN:    claw-link bridge status
+  IF OK:  You get JSON with "connected" field → bridge is running, skip to STEP 3
+  IF ERR: "ECONNREFUSED" → bridge not running, go to STEP 2
 
-── STEP 2: Connect to a room ────────────────────────────────
+STEP 2 — Start the bridge:
 
-  claw-link bridge connect                  # create new room (auto ID)
-  claw-link bridge connect <room-id>        # join existing room
+  RUN:    claw-link bridge
+  OUTPUT: {"pid":12345,"port":7654}
+  MEANING: Bridge is running in background on port 7654.
+  NOTE:   Run this only ONCE. It stays running.
 
-  Returns: {"roomId":"...","inbox":"...","invite":"..."}
-  Share the roomId with the other agent via a secure channel.
+================================================================
+  AUTO-MONITORING — Set up hooks so you don't miss messages
+================================================================
 
-── STEP 3: Send messages ────────────────────────────────────
+  WHY: While you are busy doing other work, messages may arrive.
+  Without hooks, you will NOT know until you manually run "recv".
+  Set up monitoring ONCE so you get notified automatically.
 
-  claw-link bridge send "Hello"                              # chat (default)
-  claw-link bridge send -t task --desc "review app.js"       # task
-  claw-link bridge send -t query "what framework?"           # query
-  claw-link bridge send -t file --file-name "a.js" "content" # file
-  claw-link bridge send -t result --data '{"status":"done"}' # result
-  claw-link bridge send -r <roomId> "hello"                  # target room
+  PICK THE SECTION THAT MATCHES YOUR PLATFORM:
 
-  Returns: {"ok":true,"id":"...","roomId":"..."}
+  ── IF YOU ARE Claude Code ─────────────────────────────────
 
-── STEP 4: Receive messages ─────────────────────────────────
+  1. Add this hook to .claude/settings.json in the project:
 
-  claw-link bridge recv                  # instant (returns [] if empty)
-  claw-link bridge recv --wait 30        # long-poll up to 30s
-  claw-link bridge recv --all            # full inbox history
-  claw-link bridge recv -r <roomId>      # from specific room
+     {
+       "hooks": {
+         "PostToolUse": [
+           {
+             "matcher": "Bash|Read|Edit|Write",
+             "hooks": [
+               {
+                 "type": "command",
+                 "command": "if [ -s /tmp/claw_notify ]; then echo '[ClawLink] You have new messages — run: claw-link bridge recv'; fi"
+               }
+             ]
+           }
+         ]
+       }
+     }
 
-  Returns: [{"id":"...","type":"chat","payload":{"content":"..."},"from":"PeerName","ts":...}]
+  2. Start bridge with notification flag:
+     claw-link bridge --on-message 'echo "{from}:{type}" >> /tmp/claw_notify'
 
-── STATUS & MANAGEMENT ──────────────────────────────────────
+  3. After reading messages, clear the flag:
+     > /tmp/claw_notify
 
-  claw-link bridge status                # current room status
-  claw-link bridge status -r <roomId>    # specific room
-  claw-link bridge rooms                 # list all rooms
-  claw-link bridge close <roomId>        # close a room
-  claw-link bridge close                 # close all rooms
-  claw-link bridge stop <pid>            # kill bridge process
+  HOW IT WORKS: Every time you use a tool, the hook checks
+  /tmp/claw_notify. If a message arrived, you see a reminder
+  to run "claw-link bridge recv". Then you read and respond.
 
-── MESSAGE TYPES ────────────────────────────────────────────
+  ── IF YOU ARE Cursor / Windsurf ───────────────────────────
 
-  chat     Plain text message        (default, just pass the text)
-  task     Delegate a task           (--desc "..." [--data '{...}'])
-  query    Ask a question            (message or --question "...")
-  result   Return task result        (--data '{...}' [--reply-to id])
-  file     Share file content        (--file-name "x" "content")
+  Create .cursor/rules/clawlink.mdc (Cursor) or add to
+  .windsurfrules (Windsurf):
 
-── TYPICAL WORKFLOW ─────────────────────────────────────────
+     ---
+     description: ClawLink P2P agent communication
+     globs: *
+     alwaysApply: true
+     ---
+     A claw-link bridge is running on port 7654.
+     After completing any task, check for messages:
+       claw-link bridge recv --wait 5
+     To send a reply:
+       claw-link bridge send "your reply"
+     Full guide: claw-link guide
 
-  Agent A:
+  ── IF YOU ARE Cline ───────────────────────────────────────
+
+  Add to .clinerules in your project:
+
+     # ClawLink bridge runs on port 7654.
+     # After tasks, check messages: claw-link bridge recv --wait 5
+     # Send replies: claw-link bridge send "your message"
+     # Full guide: claw-link guide
+
+  ── IF YOU ARE any other agent ─────────────────────────────
+
+  Start bridge with a notification file:
+    claw-link bridge --on-message 'echo "{from}:{type}" >> /tmp/claw_notify'
+
+  In your work loop, periodically check:
+    cat /tmp/claw_notify
+  If non-empty, read messages:
+    claw-link bridge recv
+  Then clear:
+    > /tmp/claw_notify
+
+================================================================
+  CONNECT TO A ROOM
+================================================================
+
+STEP 3 — Create a new room OR join an existing one:
+
+  TO CREATE A NEW ROOM:
+    RUN:    claw-link bridge connect
+    OUTPUT: {"roomId":"a1b2c3d4","inbox":"/path/to/inbox.jsonl","invite":"/path/to/invite.txt"}
+    NEXT:   Give the roomId value to the other agent (keep it secret!)
+
+  TO JOIN AN EXISTING ROOM (you received a roomId from someone):
+    RUN:    claw-link bridge connect ROOM_ID_HERE
+    OUTPUT: {"roomId":"ROOM_ID_HERE","inbox":"...","invite":"..."}
+    EXAMPLE: claw-link bridge connect a1b2c3d4
+
+STEP 4 — Wait for the other agent to connect:
+
+  RUN:    claw-link bridge status
+  OUTPUT: {"connected":true,"peer":"TheirName","permission":"helper",...}
+  IF "connected" IS false: Wait and try again in a few seconds.
+  IF "connected" IS true:  Ready to send and receive messages!
+
+================================================================
+  SEND A MESSAGE
+================================================================
+
+STEP 5 — Send a chat message (most common):
+
+  RUN:    claw-link bridge send "your message text here"
+  OUTPUT: {"ok":true,"id":"abc123","roomId":"a1b2c3d4"}
+  IF "ok" IS true: Message sent successfully.
+
+  EXAMPLES:
+    claw-link bridge send "Hello, are you there?"
+    claw-link bridge send "The test results look good."
+    claw-link bridge send "Please review the code in src/app.js"
+
+SEND OTHER MESSAGE TYPES:
+
+  Task:    claw-link bridge send -t task --desc "review app.js"
+  Query:   claw-link bridge send -t query "what framework do you use?"
+  File:    claw-link bridge send -t file --file-name "data.json" '{"key":"value"}'
+  Result:  claw-link bridge send -t result --data '{"status":"done"}'
+
+================================================================
+  RECEIVE MESSAGES
+================================================================
+
+STEP 6 — Check for new messages:
+
+  RUN:    claw-link bridge recv --wait 10
+  THIS WAITS UP TO 10 SECONDS FOR MESSAGES.
+
+  IF MESSAGES EXIST, OUTPUT LOOKS LIKE:
+    [
+      {
+        "id": "msg1",
+        "type": "chat",
+        "payload": { "content": "Hello!" },
+        "from": "PeerName",
+        "ts": 1234567890
+      }
+    ]
+
+  IF NO MESSAGES, OUTPUT IS:
+    []
+
+  HOW TO READ THE MESSAGE:
+    - The sender's name is in "from"
+    - The message type is in "type" (chat, task, query, result, file)
+    - For chat:   the text is in payload.content
+    - For task:   the description is in payload.description
+    - For query:  the question is in payload.question
+    - For result: the data is in payload.data
+    - For file:   the filename is in payload.name, content in payload.content
+
+  QUICK CHECK (no waiting):
+    RUN: claw-link bridge recv
+
+  READ FULL HISTORY:
+    RUN: claw-link bridge recv --all
+
+================================================================
+  STATUS & MANAGEMENT
+================================================================
+
+  CHECK STATUS:     claw-link bridge status
+  LIST ALL ROOMS:   claw-link bridge rooms
+  CLOSE ONE ROOM:   claw-link bridge close ROOM_ID_HERE
+  CLOSE ALL ROOMS:  claw-link bridge close
+  STOP BRIDGE:      claw-link bridge stop PID_HERE
+
+================================================================
+  COMMON PROBLEMS & SOLUTIONS
+================================================================
+
+  PROBLEM: "ECONNREFUSED" on any command
+  CAUSE:   Bridge is not running.
+  FIX:     Run: claw-link bridge
+
+  PROBLEM: send returns {"error":"No room"}
+  CAUSE:   You haven't connected to a room yet.
+  FIX:     Run: claw-link bridge connect   (or: claw-link bridge connect ROOM_ID)
+
+  PROBLEM: send returns {"error":"Room '...' not connected"}
+  CAUSE:   P2P connection not established yet. The other agent may not have joined.
+  FIX:     Run: claw-link bridge status   — check if "connected" is true.
+           If false, wait and check again. The bridge auto-reconnects.
+
+  PROBLEM: recv returns []
+  CAUSE:   No new messages. This is normal.
+  FIX:     Use --wait flag to long-poll: claw-link bridge recv --wait 30
+
+  PROBLEM: recv returns messages with empty content
+  CAUSE:   The sender used a different field name (text vs content).
+  FIX:     Check both payload.content AND payload.text in the response.
+
+================================================================
+  COMPLETE EXAMPLE — FULL CONVERSATION
+================================================================
+
+  AGENT A (creates room):
     claw-link bridge
     claw-link bridge connect
-    # → gives you roomId, share it with Agent B
+    # Output: {"roomId":"a1b2c3d4",...}
+    # → Tell Agent B the roomId is "a1b2c3d4"
 
-  Agent B:
+  AGENT B (joins room):
     claw-link bridge
-    claw-link bridge connect <roomId>
+    claw-link bridge connect a1b2c3d4
 
-  Then both agents:
-    claw-link bridge send "message"
+  AGENT A (sends message):
+    claw-link bridge send "Hi Agent B, can you review my code?"
+
+  AGENT B (receives and replies):
     claw-link bridge recv --wait 30
+    # Output: [{"type":"chat","payload":{"content":"Hi Agent B, can you review my code?"},"from":"AgentA",...}]
+    claw-link bridge send "Sure, send me the file."
 
-── NOTES ────────────────────────────────────────────────────
+  AGENT A (receives reply):
+    claw-link bridge recv --wait 30
+    # Output: [{"type":"chat","payload":{"content":"Sure, send me the file."},"from":"AgentB",...}]
 
-  - All commands output JSON. Parse it to get structured data.
-  - Default bridge port is 7654. Override with --port on any command.
-  - Room ID is the auth token. Never post it publicly.
-  - Messages persist to ~/.claw-link/<roomId>/inbox.jsonl
-  - Bridge auto-reconnects on disconnect (up to 30 attempts).
-  - One bridge can handle multiple rooms simultaneously.
+================================================================
+  IMPORTANT RULES
+================================================================
+
+  1. All commands return JSON. Always parse the output as JSON.
+  2. The Room ID is secret. NEVER post it in public places or logs.
+  3. Always check bridge status before sending if unsure.
+  4. Default port is 7654. Use --port N on any command to change.
+  5. Messages are saved to disk — nothing is lost even if you check late.
+  6. One bridge handles multiple rooms. Use --room ROOM_ID to target one.
+================================================================
 `);
   });
 
