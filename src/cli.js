@@ -157,8 +157,7 @@ const bridgeCmd = program
       const { ClawBridge } = require('./bridge');
       const bridge = new ClawBridge(bridgeOpts);
       await bridge.start();
-      // Tell parent we're ready
-      if (process.send) process.send({ ready: true, port, pid: process.pid });
+      if (process.send) process.send({ ready: true, port: bridge.port, pid: process.pid });
       process.on('SIGINT', () => { bridge.stop(); process.exit(0); });
       process.on('SIGTERM', () => { bridge.stop(); process.exit(0); });
       return;
@@ -169,7 +168,7 @@ const bridgeCmd = program
       const { ClawBridge } = require('./bridge');
       const bridge = new ClawBridge(bridgeOpts);
       await bridge.start();
-      console.log(JSON.stringify({ pid: process.pid, port }));
+      console.log(JSON.stringify({ pid: process.pid, port: bridge.port }));
       process.on('SIGINT', () => { bridge.stop(); process.exit(0); });
       return;
     }
@@ -249,11 +248,13 @@ bridgeCmd
   .option('--question <text>', 'Question text (type=query)')
   .option('--file-name <name>', 'File name (type=file)')
   .option('--reply-to <id>', 'Reply to message ID')
+  .option('--priority <level>', 'Priority: high|normal|low', 'normal')
   .action((message, opts) => {
     const port = parseInt(opts.port, 10);
     const body = { type: opts.type };
     if (opts.room) body.roomId = opts.room;
     if (opts.replyTo) body.replyTo = opts.replyTo;
+    body.priority = opts.priority;
     switch (opts.type) {
       case 'chat':
         body.content = message || '';
@@ -285,12 +286,14 @@ bridgeCmd
   .option('-p, --port <port>', 'Bridge HTTP port', rc.port ? String(rc.port) : '7654')
   .option('-r, --room <roomId>', 'Target room ID')
   .option('-w, --wait <seconds>', 'Long-poll timeout in seconds', '0')
+  .option('-l, --limit <count>', 'Max messages to return (backpressure)', '0')
   .option('-a, --all', 'Read all messages from inbox')
   .action((opts) => {
     const port = parseInt(opts.port, 10);
     const params = [];
     if (opts.room) params.push(`room=${opts.room}`);
     if (opts.all) params.push('all=1');
+    if (opts.limit !== '0') params.push(`limit=${opts.limit}`);
     params.push(`wait=${opts.wait}`);
     const path = '/recv?' + params.join('&');
     bridgeRun(() => bridgeHttp('GET', path, null, port));
@@ -325,6 +328,35 @@ bridgeCmd
   .action((roomId, opts) => {
     const port = parseInt(opts.port, 10);
     bridgeRun(() => bridgeHttp('POST', '/close', roomId ? { roomId } : {}, port));
+  });
+
+// ── bridge tasks ────────────────────────────────────────────
+bridgeCmd
+  .command('tasks')
+  .description('List tracked tasks and their states')
+  .option('-p, --port <port>', 'Bridge HTTP port', rc.port ? String(rc.port) : '7654')
+  .option('-r, --room <roomId>', 'Target room ID')
+  .option('-s, --state <state>', 'Filter by state: sent|acked|completed|failed')
+  .action((opts) => {
+    const port = parseInt(opts.port, 10);
+    const params = [];
+    if (opts.room) params.push(`room=${opts.room}`);
+    if (opts.state) params.push(`state=${opts.state}`);
+    const path = '/tasks' + (params.length ? '?' + params.join('&') : '');
+    bridgeRun(() => bridgeHttp('GET', path, null, port));
+  });
+
+// ── bridge perm ─────────────────────────────────────────────
+bridgeCmd
+  .command('perm <level>')
+  .description('Change room permission: intimate|helper|chat')
+  .option('-p, --port <port>', 'Bridge HTTP port', rc.port ? String(rc.port) : '7654')
+  .option('-r, --room <roomId>', 'Target room ID')
+  .action((level, opts) => {
+    const port = parseInt(opts.port, 10);
+    const body = { level };
+    if (opts.room) body.roomId = opts.room;
+    bridgeRun(() => bridgeHttp('POST', '/perm', body, port));
   });
 
 // ── guide ──────────────────────────────────────────────────
@@ -481,6 +513,12 @@ SEND OTHER MESSAGE TYPES:
   File:    claw-link bridge send -t file --file-name "data.json" '{"key":"value"}'
   Result:  claw-link bridge send -t result --data '{"status":"done"}'
 
+PRIORITY — Mark urgent messages so they are delivered first:
+
+  claw-link bridge send --priority high "URGENT: server is down"
+  claw-link bridge send --priority low "FYI: updated docs"
+  (default is "normal". Receiver gets high-priority messages first.)
+
 ================================================================
   RECEIVE MESSAGES
 ================================================================
@@ -516,6 +554,11 @@ STEP 6 — Check for new messages:
   QUICK CHECK (no waiting):
     RUN: claw-link bridge recv
 
+  LIMIT (backpressure — process N messages at a time):
+    RUN: claw-link bridge recv --limit 5
+    Returns at most 5 messages, highest priority first.
+    Remaining messages stay in queue for next recv call.
+
   READ FULL HISTORY:
     RUN: claw-link bridge recv --all
 
@@ -528,6 +571,48 @@ STEP 6 — Check for new messages:
   CLOSE ONE ROOM:   claw-link bridge close ROOM_ID_HERE
   CLOSE ALL ROOMS:  claw-link bridge close
   STOP BRIDGE:      claw-link bridge stop PID_HERE
+
+================================================================
+  TASK TRACKING — Monitor delegated tasks
+================================================================
+
+  When you send a task, the bridge automatically tracks it.
+
+  LIST ALL TASKS:
+    RUN:    claw-link bridge tasks
+    OUTPUT: [{"id":"abc","description":"review app.js","state":"sent","sentAt":...}]
+
+  FILTER BY STATE:
+    claw-link bridge tasks --state sent        # waiting for response
+    claw-link bridge tasks --state acked       # peer received it
+    claw-link bridge tasks --state completed   # result received
+
+  TASK STATES:
+    sent      → Task sent, waiting for peer to receive
+    acked     → Peer received the task (ACK)
+    completed → Peer returned a result (result message with replyTo)
+
+  HOW IT WORKS:
+    1. You send: claw-link bridge send -t task --desc "review code"
+    2. Bridge auto-tracks it (state: sent)
+    3. Peer ACKs → state: acked
+    4. Peer sends result with --reply-to YOUR_TASK_ID → state: completed
+
+================================================================
+  PERMISSION — Adjust trust level dynamically
+================================================================
+
+  Default is "helper". Change per room at runtime:
+
+  claw-link bridge perm helper                 # collaboration mode (default)
+  claw-link bridge perm chat                   # untrusted peer, chat only
+  claw-link bridge perm intimate               # fully trusted, all access
+  claw-link bridge perm helper -r ROOM_ID      # target specific room
+
+  WHEN TO USE EACH:
+    helper   → Default for most cases. Chat + task + file, private data filtered.
+    chat     → External/untrusted agents. Chat only, no tasks, no files.
+    intimate → Agents you fully control (e.g. your own runner). Everything allowed.
 
 ================================================================
   COMMON PROBLEMS & SOLUTIONS

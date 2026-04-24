@@ -288,8 +288,11 @@ Check pending count: `curl -s http://127.0.0.1:7654/status` → `{"pending": 0, 
 | `bridge send -t query "..."` | `POST /send` | Send query |
 | `bridge recv [--wait N]` | `GET /recv?wait=N` | Receive messages |
 | `bridge recv --all` | `GET /recv?all=1` | Read full inbox |
+| `bridge recv --limit N` | `GET /recv?limit=N` | Backpressure: max N msgs |
 | `bridge status [--room X]` | `GET /status?room=X` | Room status |
 | `bridge rooms` | `GET /rooms` | List all rooms |
+| `bridge tasks [--state X]` | `GET /tasks?state=X` | Track delegated tasks |
+| `bridge perm <level>` | `POST /perm` | Change permission dynamically |
 | `bridge close [room-id]` | `POST /close` | Close room |
 | `bridge stop [pid]` | — | Kill bridge process |
 
@@ -303,6 +306,8 @@ Check pending count: `curl -s http://127.0.0.1:7654/status` → `{"pending": 0, 
 | GET | `/recv` | — | `[messages]` |
 | GET | `/recv?wait=N` | — | `[messages]` (long-poll, max 120s) |
 | GET | `/rooms` | — | `[{roomId, connected, peer, ...}]` |
+| GET | `/tasks` | — | `[{id, description, state, sentAt, ...}]` |
+| POST | `/perm` | `{roomId?, level}` | `{ok, permission}` |
 | POST | `/close` | `{roomId?}` | `{ok}` |
 | GET | `/health` | — | `{status}` |
 

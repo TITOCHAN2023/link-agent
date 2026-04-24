@@ -16,6 +16,12 @@ const MSG = {
   SESSION: 'session',    // session lifecycle (start/accept/reject/end)
 };
 
+const PRIORITY = {
+  HIGH: 2,
+  NORMAL: 1,
+  LOW: 0,
+};
+
 /**
  * Create a message envelope with unique ID and timestamp.
  * All P2P messages go through this.
@@ -27,13 +33,14 @@ const MSG = {
  * @param {string} [opts.replyTo]  Message ID this is replying to
  * @returns {object}
  */
-function createMessage(type, payload, { from, replyTo } = {}) {
+function createMessage(type, payload, { from, replyTo, priority } = {}) {
   return {
     id: crypto.randomBytes(4).toString('hex'),
     type,
     payload,
     from: from || null,
     replyTo: replyTo || null,
+    priority: priority ?? PRIORITY.NORMAL,
     ts: Date.now(),
   };
 }
@@ -77,6 +84,7 @@ function session(action, opts = {}) {
 
 module.exports = {
   MSG,
+  PRIORITY,
   createMessage,
   chat,
   task,

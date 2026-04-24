@@ -43,6 +43,10 @@ class RoomState {
     this.pending = this._loadPending();
     // Dedup: set of recently seen inbound message IDs
     this.seenIds = new Set();
+
+    // Task tracking: outbound tasks and their lifecycle
+    this.tasksPath = path.join(this.dataDir, 'tasks.jsonl');
+    this.tasks = this._loadTasks();
   }
 
   appendInbox(msg) {
@@ -99,6 +103,64 @@ class RoomState {
     const lines = [...this.pending.values()].map(m => JSON.stringify(m)).join('\n');
     fs.writeFileSync(this.pendingPath, lines ? lines + '\n' : '');
   }
+
+  // -- task tracking -------------------------------------------
+
+  trackTask(envelope) {
+    const entry = {
+      id: envelope.id,
+      description: envelope.payload?.description || '',
+      state: 'sent',
+      priority: envelope.priority ?? 1,
+      sentAt: envelope.ts,
+      completedAt: null,
+      resultId: null,
+    };
+    this.tasks.set(envelope.id, entry);
+    this._saveTasks();
+  }
+
+  completeTask(resultMsg) {
+    const taskId = resultMsg.replyTo;
+    if (!taskId || !this.tasks.has(taskId)) return false;
+    const t = this.tasks.get(taskId);
+    t.state = 'completed';
+    t.completedAt = Date.now();
+    t.resultId = resultMsg.id;
+    this._saveTasks();
+    return true;
+  }
+
+  ackTask(msgId) {
+    const t = this.tasks.get(msgId);
+    if (!t || t.state !== 'sent') return;
+    t.state = 'acked';
+    this._saveTasks();
+  }
+
+  getTasks() {
+    return [...this.tasks.values()];
+  }
+
+  _loadTasks() {
+    try {
+      const c = fs.readFileSync(this.tasksPath, 'utf8').trim();
+      if (!c) return new Map();
+      const map = new Map();
+      for (const line of c.split('\n')) {
+        try {
+          const t = JSON.parse(line);
+          if (t && t.id) map.set(t.id, t);
+        } catch { /* skip */ }
+      }
+      return map;
+    } catch { return new Map(); }
+  }
+
+  _saveTasks() {
+    const lines = [...this.tasks.values()].map(t => JSON.stringify(t)).join('\n');
+    fs.writeFileSync(this.tasksPath, lines ? lines + '\n' : '');
+  }
 }
 
 /**
@@ -116,6 +178,7 @@ class RoomState {
 class ClawBridge {
   constructor({
     port = 7654,
+    maxPortRetries = 10,
     signalingUrl = 'wss://ginfo.cc/signal/',
     name = 'Claw',
     permission = 'helper',
@@ -130,6 +193,7 @@ class ClawBridge {
     intro,
   } = {}) {
     this.port = port;
+    this.maxPortRetries = maxPortRetries;
     this.signalingUrl = signalingUrl;
     this.name = name;
     this.permission = permission;
@@ -137,7 +201,8 @@ class ClawBridge {
     this._aliases = aliases || {};
 
     this.hooks = { connect: onConnect, message: onMessage, disconnect: onDisconnect };
-    this._baseDir = dataDir || path.join(process.env.HOME || '/tmp', '.claw-link');
+    this._customDataDir = dataDir || null;
+    this._baseDir = null;
     this._notifier = new Notifier(notify || null);
 
     // Multi-room state
@@ -162,14 +227,35 @@ class ClawBridge {
   // -- lifecycle -----------------------------------------------------------
 
   start() {
-    fs.mkdirSync(this._baseDir, { recursive: true });
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       this.server = http.createServer((req, res) => this._handleHTTP(req, res));
-      this.server.listen(this.port, '127.0.0.1', () => {
+      let port = this.port;
+      let attempts = 0;
+
+      const onError = (err) => {
+        if (err.code === 'EADDRINUSE' && attempts < this.maxPortRetries) {
+          attempts++;
+          port++;
+          this._log(`Port ${port - 1} in use, trying ${port}`);
+          this.server.listen(port, '127.0.0.1');
+        } else {
+          this.server.removeListener('error', onError);
+          reject(err);
+        }
+      };
+
+      this.server.on('error', onError);
+      this.server.once('listening', () => {
+        this.server.removeListener('error', onError);
+        this.port = port;
+        this._baseDir = this._customDataDir || path.join(process.env.HOME || '/tmp', '.claw-link', `bridge-${this.port}`);
+        fs.mkdirSync(this._baseDir, { recursive: true });
         this._log(`Bridge HTTP on http://127.0.0.1:${this.port}`);
         if (this._tg) this._tg.start();
         resolve();
       });
+
+      this.server.listen(port, '127.0.0.1');
     });
   }
 
@@ -256,9 +342,10 @@ class ClawBridge {
         room._lastPeerActivity = Date.now();
         return;
       }
-      // Handle ACK: remove from pending, don't deliver to user
+      // Handle ACK: remove from pending, update task state, don't deliver to user
       if (msg.type === 'ack' && msg.replyTo) {
         room.ackReceived(msg.replyTo);
+        room.ackTask(msg.replyTo);
         room._lastPeerActivity = Date.now();
         return;
       }
@@ -276,6 +363,10 @@ class ClawBridge {
       }
 
       room._lastPeerActivity = Date.now();
+      // Auto-complete task when result arrives with matching replyTo
+      if (msg.type === 'result' && msg.replyTo) {
+        room.completeTask(msg);
+      }
       room.appendInbox(msg);
       room.msgCount++;
       room.unread.push(msg);
@@ -508,6 +599,10 @@ class ClawBridge {
         if (envelope.type !== 'ack') {
           room.addPending(envelope);
         }
+        // Auto-track outbound tasks
+        if (envelope.type === 'task') {
+          room.trackTask(envelope);
+        }
         // Notify TG of outbound messages too (so user sees both sides)
         const tgOut = { roomId: room.roomId, from: this.name + ' (me)', type: envelope.type };
         if (envelope.text) tgOut.text = envelope.text;
@@ -523,7 +618,7 @@ class ClawBridge {
         return this._json(res, 200, { ok: true, id: envelope.id, roomId: room.roomId });
       }
 
-      // GET /recv?room=X&wait=N&all=1
+      // GET /recv?room=X&wait=N&all=1&limit=N
       if (method === 'GET' && pathname === '/recv') {
         const rid = this._resolveAlias(url.searchParams.get('room'));
         const room = rid ? this.rooms.get(rid) : this.rooms.values().next().value;
@@ -532,12 +627,18 @@ class ClawBridge {
         if (url.searchParams.get('all') === '1') {
           return this._json(res, 200, room.readAllInbox());
         }
+        const limit = parseInt(url.searchParams.get('limit') || '0', 10);
         const waitSec = parseInt(url.searchParams.get('wait') || '0', 10);
         if (room.unread.length > 0 || waitSec <= 0) {
-          return this._json(res, 200, room.unread.splice(0));
+          // Sort by priority (high first), then by arrival order
+          room.unread.sort((a, b) => (b.priority || 1) - (a.priority || 1));
+          const batch = limit > 0 ? room.unread.splice(0, limit) : room.unread.splice(0);
+          return this._json(res, 200, batch);
         }
         const clamped = Math.min(Math.max(waitSec, 1), 120);
-        const msgs = await this._longPoll(room, clamped);
+        let msgs = await this._longPoll(room, clamped);
+        msgs.sort((a, b) => (b.priority || 1) - (a.priority || 1));
+        if (limit > 0) msgs = msgs.slice(0, limit);
         return this._json(res, 200, msgs);
       }
 
@@ -574,9 +675,34 @@ class ClawBridge {
         return this._json(res, 200, info);
       }
 
+      // GET /tasks?room=X&state=Y — task lifecycle tracking
+      if (method === 'GET' && pathname === '/tasks') {
+        const rid = this._resolveAlias(url.searchParams.get('room'));
+        const stateFilter = url.searchParams.get('state');
+        const room = rid ? this.rooms.get(rid) : this.rooms.values().next().value;
+        if (!room) return this._json(res, 200, []);
+        let tasks = room.getTasks();
+        if (stateFilter) tasks = tasks.filter(t => t.state === stateFilter);
+        return this._json(res, 200, tasks);
+      }
+
+      // POST /perm {roomId, level} — dynamic permission adjustment
+      if (method === 'POST' && pathname === '/perm') {
+        const body = await this._readBody(req);
+        const rid = this._resolveAlias(body.roomId);
+        const level = body.level;
+        if (!level || !['intimate', 'helper', 'chat'].includes(level)) {
+          return this._json(res, 400, { error: 'level must be intimate|helper|chat' });
+        }
+        const room = rid ? this.rooms.get(rid) : this.rooms.values().next().value;
+        if (!room) return this._json(res, 404, { error: 'No room' });
+        this._setRoomPerm(room.roomId, level);
+        return this._json(res, 200, { ok: true, roomId: room.roomId, permission: level });
+      }
+
       // GET /health
       if (method === 'GET' && pathname === '/health') {
-        return this._json(res, 200, { status: 'ok', rooms: this.rooms.size });
+        return this._json(res, 200, { status: 'ok', port: this.port, rooms: this.rooms.size });
       }
 
       return this._json(res, 404, { error: 'Not found' });
@@ -589,15 +715,24 @@ class ClawBridge {
 
   _buildEnvelope(body) {
     if (body.id) return body;
+    let envelope;
     switch (body.type) {
-      case 'chat':   return proto.chat(body.content || body.text || '', this.name);
-      case 'task':   return proto.task(body.description || '', body.data || null, this.name);
-      case 'result': return proto.result(body.data || null, this.name, body.replyTo);
-      case 'file':   return proto.file(body.name || '', body.content || '', this.name);
-      case 'query':  return proto.query(body.question || '', this.name);
-      case 'ack':    return proto.ack(body.replyTo || '', this.name);
-      default:       return proto.createMessage(body.type || 'chat', body.payload || body, { from: this.name });
+      case 'chat':   envelope = proto.chat(body.content || body.text || '', this.name); break;
+      case 'task':   envelope = proto.task(body.description || '', body.data || null, this.name); break;
+      case 'result': envelope = proto.result(body.data || null, this.name, body.replyTo); break;
+      case 'file':   envelope = proto.file(body.name || '', body.content || '', this.name); break;
+      case 'query':  envelope = proto.query(body.question || '', this.name); break;
+      case 'ack':    envelope = proto.ack(body.replyTo || '', this.name); break;
+      default:       envelope = proto.createMessage(body.type || 'chat', body.payload || body, { from: this.name }); break;
     }
+    // Pass through priority if specified
+    if (body.priority !== undefined) {
+      const p = typeof body.priority === 'string'
+        ? ({ high: 2, normal: 1, low: 0 }[body.priority.toLowerCase()] ?? 1)
+        : Number(body.priority);
+      envelope.priority = p;
+    }
+    return envelope;
   }
 
   // -- ACK helpers ---------------------------------------------------------
