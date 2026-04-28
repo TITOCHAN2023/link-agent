@@ -231,9 +231,14 @@ bridgeCmd
   .command('connect [room-id]')
   .description('Connect to a room via running bridge')
   .option('-p, --port <port>', 'Bridge HTTP port', rc.port ? String(rc.port) : '7654')
+  .option('--agent <id>', 'Agent identity (or set CLAWLINK_AGENT_ID env var)')
   .action((roomId, opts) => {
     const port = parseInt(opts.port, 10);
-    bridgeRun(() => bridgeHttp('POST', '/connect', roomId ? { roomId } : {}, port));
+    const agentId = opts.agent || process.env.CLAWLINK_AGENT_ID || null;
+    const body = {};
+    if (roomId) body.roomId = roomId;
+    if (agentId) body.agentId = agentId;
+    bridgeRun(() => bridgeHttp('POST', '/connect', body, port));
   });
 
 // ── bridge send ─────────────────────────────────────────────
@@ -249,10 +254,13 @@ bridgeCmd
   .option('--file-name <name>', 'File name (type=file)')
   .option('--reply-to <id>', 'Reply to message ID')
   .option('--priority <level>', 'Priority: high|normal|low', 'normal')
+  .option('--agent <id>', 'Agent identity (or set CLAWLINK_AGENT_ID env var)')
   .action((message, opts) => {
     const port = parseInt(opts.port, 10);
+    const agentId = opts.agent || process.env.CLAWLINK_AGENT_ID || null;
     const body = { type: opts.type };
     if (opts.room) body.roomId = opts.room;
+    if (agentId) body.agentId = agentId;
     if (opts.replyTo) body.replyTo = opts.replyTo;
     body.priority = opts.priority;
     switch (opts.type) {
@@ -285,13 +293,16 @@ bridgeCmd
   .description('Receive messages from bridge')
   .option('-p, --port <port>', 'Bridge HTTP port', rc.port ? String(rc.port) : '7654')
   .option('-r, --room <roomId>', 'Target room ID')
+  .option('--agent <id>', 'Agent identity (or set CLAWLINK_AGENT_ID env var)')
   .option('-w, --wait <seconds>', 'Long-poll timeout in seconds', '0')
   .option('-l, --limit <count>', 'Max messages to return (backpressure)', '0')
   .option('-a, --all', 'Read all messages from inbox')
   .action((opts) => {
     const port = parseInt(opts.port, 10);
+    const agentId = opts.agent || process.env.CLAWLINK_AGENT_ID || null;
     const params = [];
     if (opts.room) params.push(`room=${opts.room}`);
+    if (agentId) params.push(`agent=${agentId}`);
     if (opts.all) params.push('all=1');
     if (opts.limit !== '0') params.push(`limit=${opts.limit}`);
     params.push(`wait=${opts.wait}`);
@@ -380,7 +391,8 @@ WHAT IS THIS?
 STEP 1 — Check if bridge is already running:
 
   RUN:    claw-link bridge status
-  IF OK:  You get JSON with "connected" field → bridge is running, skip to STEP 3
+  IF OK:  You get JSON with "connected" field → bridge is running.
+          First time? Read AUTO-MONITORING below. Otherwise skip to STEP 3.
   IF ERR: "ECONNREFUSED" → bridge not running, go to STEP 2
 
 STEP 2 — Start the bridge:
@@ -395,14 +407,16 @@ STEP 2 — Start the bridge:
 ================================================================
 
   WHY: While you are busy doing other work, messages may arrive.
-  Without hooks, you will NOT know until you manually run "recv".
-  Set up monitoring ONCE so you get notified automatically.
+  The bridge AUTO-WRITES a notification file for each agent at:
+    /tmp/claw_notify_YOUR_AGENT_ID
+  You just need a way to CHECK that file periodically.
 
   PICK THE SECTION THAT MATCHES YOUR PLATFORM:
 
   ── IF YOU ARE Claude Code ─────────────────────────────────
 
-  1. Add this hook to .claude/settings.json in the project:
+  Add this hook to .claude/settings.json in the project
+  (replace YOUR_AGENT_ID with your chosen agent identity):
 
      {
        "hooks": {
@@ -412,7 +426,7 @@ STEP 2 — Start the bridge:
              "hooks": [
                {
                  "type": "command",
-                 "command": "if [ -s /tmp/claw_notify ]; then echo '[ClawLink] You have new messages — run: claw-link bridge recv'; fi"
+                 "command": "if [ -s /tmp/claw_notify_YOUR_AGENT_ID ]; then echo '[ClawLink] New messages — run: claw-link bridge recv --agent YOUR_AGENT_ID'; fi"
                }
              ]
            }
@@ -420,15 +434,11 @@ STEP 2 — Start the bridge:
        }
      }
 
-  2. Start bridge with notification flag:
-     claw-link bridge --on-message 'echo "{from}:{type}" >> /tmp/claw_notify'
+  After reading messages, clear YOUR notification file:
+    > /tmp/claw_notify_YOUR_AGENT_ID
 
-  3. After reading messages, clear the flag:
-     > /tmp/claw_notify
-
-  HOW IT WORKS: Every time you use a tool, the hook checks
-  /tmp/claw_notify. If a message arrived, you see a reminder
-  to run "claw-link bridge recv". Then you read and respond.
+  THAT'S IT. The bridge writes /tmp/claw_notify_YOUR_AGENT_ID
+  automatically when messages arrive. No --on-message needed.
 
   ── IF YOU ARE Cursor / Windsurf ───────────────────────────
 
@@ -441,32 +451,36 @@ STEP 2 — Start the bridge:
      alwaysApply: true
      ---
      A claw-link bridge is running on port 7654.
-     After completing any task, check for messages:
-       claw-link bridge recv --wait 5
-     To send a reply:
-       claw-link bridge send "your reply"
+     Your agent identity: cursor-a
+     Connect: claw-link bridge connect ROOM --agent cursor-a
+     Check:   claw-link bridge recv --agent cursor-a --wait 5
+     Send:    claw-link bridge send --agent cursor-a "your reply"
+     Notification file: /tmp/claw_notify_cursor-a (auto-written)
      Full guide: claw-link guide
 
   ── IF YOU ARE Cline ───────────────────────────────────────
 
   Add to .clinerules in your project:
 
-     # ClawLink bridge runs on port 7654.
-     # After tasks, check messages: claw-link bridge recv --wait 5
-     # Send replies: claw-link bridge send "your message"
+     # ClawLink bridge runs on port 7654. Agent ID: cline-a
+     # Connect:  claw-link bridge connect ROOM --agent cline-a
+     # Receive:  claw-link bridge recv --agent cline-a --wait 5
+     # Send:     claw-link bridge send --agent cline-a "your message"
+     # Notifications auto-written to: /tmp/claw_notify_cline-a
      # Full guide: claw-link guide
 
   ── IF YOU ARE any other agent ─────────────────────────────
 
-  Start bridge with a notification file:
-    claw-link bridge --on-message 'echo "{from}:{type}" >> /tmp/claw_notify'
+  Connect with your identity:
+    claw-link bridge connect ROOM --agent my-agent
 
-  In your work loop, periodically check:
-    cat /tmp/claw_notify
+  The bridge auto-writes /tmp/claw_notify_my-agent on messages.
+  In your work loop, check it:
+    cat /tmp/claw_notify_my-agent
   If non-empty, read messages:
-    claw-link bridge recv
+    claw-link bridge recv --agent my-agent
   Then clear:
-    > /tmp/claw_notify
+    > /tmp/claw_notify_my-agent
 
 ================================================================
   CONNECT TO A ROOM
@@ -483,6 +497,30 @@ STEP 3 — Create a new room OR join an existing one:
     RUN:    claw-link bridge connect ROOM_ID_HERE
     OUTPUT: {"roomId":"ROOM_ID_HERE","inbox":"...","invite":"..."}
     EXAMPLE: claw-link bridge connect a1b2c3d4
+
+  WITH AGENT IDENTITY (recommended for multi-agent setups):
+    CREATE:  claw-link bridge connect --agent MY_AGENT_ID
+    JOIN:    claw-link bridge connect ROOM_ID --agent MY_AGENT_ID
+    WHY:     Each agent gets its own message queue and notification file.
+             Without --agent, all agents share one queue (old behavior).
+
+  NAMING YOUR AGENT ID:
+    Rules: letters, numbers, hyphens, underscores only (max 64 chars).
+    Examples: claude-a, cursor-1, my-coder, review-bot
+    TIP: Use your platform name + a short suffix: claude-1, cursor-a
+
+  SET ONCE WITH ENV VAR (so you don't need --agent every time):
+    export CLAWLINK_AGENT_ID=claude-a
+    Now all commands auto-use "claude-a". --agent flag overrides if given.
+
+  WHAT THE OUTPUT MEANS (when using --agent):
+    {
+      "roomId": "a1b2c3d4",         ← Share this with the other agent
+      "agentId": "MY_AGENT_ID",     ← Your identity on this bridge
+      "notify": "/tmp/claw_notify_MY_AGENT_ID",  ← Auto-written on new messages
+      "recv": "claw-link bridge recv --agent MY_AGENT_ID --wait 30",  ← Run this to get messages
+      "hookCheck": "[ -s /tmp/claw_notify_MY_AGENT_ID ]"  ← Use in PostToolUse hook
+    }
 
 STEP 4 — Wait for the other agent to connect:
 
@@ -505,6 +543,11 @@ STEP 5 — Send a chat message (most common):
     claw-link bridge send "Hello, are you there?"
     claw-link bridge send "The test results look good."
     claw-link bridge send "Please review the code in src/app.js"
+
+SEND WITH AGENT IDENTITY:
+
+  claw-link bridge send --agent MY_AGENT_ID "your message"
+  (Tracks origin so replies come back to YOUR queue, not others.)
 
 SEND OTHER MESSAGE TYPES:
 
@@ -551,6 +594,11 @@ STEP 6 — Check for new messages:
     - For result: the data is in payload.data
     - For file:   the filename is in payload.name, content in payload.content
 
+  WITH AGENT IDENTITY (your own queue):
+    RUN: claw-link bridge recv --agent MY_AGENT_ID --wait 10
+    Only returns messages routed to YOUR agent — replies to your sends
+    go only to you, broadcast messages go to everyone.
+
   QUICK CHECK (no waiting):
     RUN: claw-link bridge recv
 
@@ -559,8 +607,10 @@ STEP 6 — Check for new messages:
     Returns at most 5 messages, highest priority first.
     Remaining messages stay in queue for next recv call.
 
-  READ FULL HISTORY:
+  READ FULL HISTORY (shared inbox — all messages, all agents):
     RUN: claw-link bridge recv --all
+    NOTE: --all reads from the shared inbox file, NOT your per-agent queue.
+          It shows ALL messages regardless of --agent.
 
 ================================================================
   STATUS & MANAGEMENT
@@ -639,6 +689,16 @@ STEP 6 — Check for new messages:
   CAUSE:   The sender used a different field name (text vs content).
   FIX:     Check both payload.content AND payload.text in the response.
 
+  PROBLEM: recv returns [] but I know messages were sent (and I used --agent before)
+  CAUSE:   You connected with --agent but forgot --agent on recv.
+           With agents registered, messages go to per-agent queues only.
+  FIX:     Add --agent YOUR_ID: claw-link bridge recv --agent YOUR_ID --wait 10
+
+  PROBLEM: connect returns "Invalid agentId"
+  CAUSE:   agentId has spaces or special characters.
+  FIX:     Use only letters, numbers, hyphens, underscores. Max 64 chars.
+           Examples: claude-a, my-agent-1, review_bot
+
 ================================================================
   COMPLETE EXAMPLE — FULL CONVERSATION
 ================================================================
@@ -666,6 +726,45 @@ STEP 6 — Check for new messages:
     # Output: [{"type":"chat","payload":{"content":"Sure, send me the file."},"from":"AgentB",...}]
 
 ================================================================
+  MULTI-AGENT EXAMPLE — Two agents on the same machine
+================================================================
+
+  SETUP (same bridge for both agents):
+    claw-link bridge
+
+  AGENT A:
+    claw-link bridge connect --agent agent-a
+    # → {"roomId":"a1b2c3d4","agentId":"agent-a","notify":"/tmp/claw_notify_agent-a",...}
+    # → Share roomId "a1b2c3d4" with Agent B
+
+  AGENT B (same machine, same bridge, same room):
+    claw-link bridge connect a1b2c3d4 --agent agent-b
+    # → Transport reused, separate message queue
+
+  AGENT A sends:
+    claw-link bridge send --agent agent-a "Hello Agent B"
+
+  AGENT B receives (only gets messages from its own queue):
+    claw-link bridge recv --agent agent-b --wait 30
+    # → [{"type":"chat","payload":{"content":"Hello Agent B"},...}]
+
+  AGENT B replies:
+    claw-link bridge send --agent agent-b "Got it, working on it"
+
+  AGENT A receives (reply routed back to sender):
+    claw-link bridge recv --agent agent-a --wait 30
+    # → [{"type":"chat","payload":{"content":"Got it, working on it"},...}]
+
+  CHECK WHO IS IN THE ROOM:
+    claw-link bridge rooms
+    # → [{"roomId":"a1b2c3d4","agents":["agent-a","agent-b"],...}]
+
+  NOTIFICATION FILES (auto-written by bridge):
+    Agent A checks: cat /tmp/claw_notify_agent-a
+    Agent B checks: cat /tmp/claw_notify_agent-b
+    (Each agent has its own file — no cross-talk.)
+
+================================================================
   IMPORTANT RULES
 ================================================================
 
@@ -675,6 +774,8 @@ STEP 6 — Check for new messages:
   4. Default port is 7654. Use --port N on any command to change.
   5. Messages are saved to disk — nothing is lost even if you check late.
   6. One bridge handles multiple rooms. Use --room ROOM_ID to target one.
+  7. Multiple agents on one machine? Set CLAWLINK_AGENT_ID env var or use
+     --agent ID on connect/send/recv. Each agent gets its own queue.
 ================================================================
 `);
   });

@@ -44,6 +44,10 @@ class RoomState {
     // Dedup: set of recently seen inbound message IDs
     this.seenIds = new Set();
 
+    // Agent multiplexing: per-agent message queues within this room
+    this.agentQueues = new Map();
+    this.msgOrigin = new Map();
+
     // Task tracking: outbound tasks and their lifecycle
     this.tasksPath = path.join(this.dataDir, 'tasks.jsonl');
     this.tasks = this._loadTasks();
@@ -161,15 +165,37 @@ class RoomState {
     const lines = [...this.tasks.values()].map(t => JSON.stringify(t)).join('\n');
     fs.writeFileSync(this.tasksPath, lines ? lines + '\n' : '');
   }
+
+  static validAgentId(id) {
+    return typeof id === 'string' && id.length > 0 && id.length <= 64 && /^[a-zA-Z0-9_-]+$/.test(id);
+  }
+
+  getAgent(agentId) {
+    if (!agentId) return null;
+    if (!RoomState.validAgentId(agentId)) return null;
+    if (!this.agentQueues.has(agentId)) {
+      this.agentQueues.set(agentId, { unread: [], waiters: [] });
+    }
+    return this.agentQueues.get(agentId);
+  }
+
+  trackOrigin(msgId, agentId) {
+    if (!msgId || !agentId) return;
+    this.msgOrigin.set(msgId, agentId);
+    if (this.msgOrigin.size > 2000) {
+      const first = this.msgOrigin.keys().next().value;
+      this.msgOrigin.delete(first);
+    }
+  }
 }
 
 /**
  * ClawBridge — multi-room HTTP bridge for serial agents.
  *
  * HTTP API (all endpoints accept roomId to target a specific room):
- *   POST /connect {roomId?}             → connect to room (create if new, join if exists)
- *   POST /send    {roomId, type, ...}   → send message
- *   GET  /recv?room=X&wait=N           → poll messages
+ *   POST /connect {roomId?, agentId?}   → connect to room (reuses transport if active)
+ *   POST /send    {roomId, agentId?, type, ...} → send message (tracks origin per agent)
+ *   GET  /recv?room=X&agent=Y&wait=N   → poll messages (per-agent queue if agent specified)
  *   GET  /status?room=X                → room status (omit room for all)
  *   POST /close   {roomId}             → close room
  *   GET  /rooms                         → list all rooms
@@ -276,6 +302,7 @@ class ClawBridge {
   }
 
   _connectRoom(room, targetRoomId) {
+    if (room.transport && room.transport.connected && !room.stopped) return;
     if (room.transport) {
       room.transport.removeAllListeners();
       room.transport.close();
@@ -369,15 +396,39 @@ class ClawBridge {
       }
       room.appendInbox(msg);
       room.msgCount++;
-      room.unread.push(msg);
-      this._flushWaiters(room);
-      const hookData = { from: msg.from, type: msg.type, id: msg.id, roomId: room.roomId };
-      if (msg.payload) {
-        if (msg.payload.content) hookData.content = msg.payload.content;
-        if (msg.payload.description) hookData.description = msg.payload.description;
-        if (msg.payload.question) hookData.question = msg.payload.question;
+      let targetAgents = [];
+      if (room.agentQueues.size === 0) {
+        room.unread.push(msg);
+        this._flushWaiters(room);
+      } else if (msg.replyTo && room.msgOrigin.has(msg.replyTo)) {
+        const targetId = room.msgOrigin.get(msg.replyTo);
+        const agent = room.agentQueues.get(targetId);
+        if (agent) {
+          agent.unread.push(msg);
+          this._flushWaiters(agent);
+          targetAgents = [targetId];
+        } else {
+          for (const [id, a] of room.agentQueues) { a.unread.push(msg); this._flushWaiters(a); }
+          targetAgents = [...room.agentQueues.keys()];
+        }
+      } else {
+        for (const [id, a] of room.agentQueues) { a.unread.push(msg); this._flushWaiters(a); }
+        targetAgents = [...room.agentQueues.keys()];
       }
-      this._runHook('message', hookData);
+      const hookBase = { from: msg.from, type: msg.type, id: msg.id, roomId: room.roomId };
+      if (msg.payload) {
+        if (msg.payload.content) hookBase.content = msg.payload.content;
+        if (msg.payload.description) hookBase.description = msg.payload.description;
+        if (msg.payload.question) hookBase.question = msg.payload.question;
+      }
+      if (targetAgents.length > 0) {
+        for (const agentId of targetAgents) {
+          this._runHook('message', { ...hookBase, agentId });
+          this._writeAgentNotify(agentId, hookBase);
+        }
+      } else {
+        this._runHook('message', hookBase);
+      }
       const tgData = { roomId: room.roomId, from: msg.from, type: msg.type };
       if (msg.text) tgData.text = msg.text;
       if (msg.payload) {
@@ -516,10 +567,32 @@ class ClawBridge {
     res.setHeader('Content-Type', 'application/json');
 
     try {
-      // POST /connect {roomId?} — connect to room (create if new, join if exists)
+      // POST /connect {roomId?, agentId?} — connect to room (reuses transport if active)
       if (method === 'POST' && pathname === '/connect') {
         const body = await this._readBody(req);
         const resolvedRoom = this._resolveAlias(body.roomId);
+        const agentId = body.agentId || null;
+        if (agentId && !RoomState.validAgentId(agentId)) {
+          return this._json(res, 400, { error: 'Invalid agentId: only alphanumeric, hyphen and underscore (max 64 chars)' });
+        }
+
+        // Reuse existing room if transport is active
+        const existing = resolvedRoom ? this.rooms.get(resolvedRoom) : null;
+        if (existing && existing.transport && !existing.stopped) {
+          if (agentId) existing.getAgent(agentId);
+          const actualId = existing.transport.roomId || existing.roomId;
+          const invite = generateInvite(actualId, { signal: this.signalingUrl, creator: this.name, perm: this.permission });
+          const invitePath = writeInvite(invite, existing.dataDir);
+          const resp = { roomId: actualId, inbox: existing.inboxPath, invite: invitePath };
+          if (agentId) {
+            resp.agentId = agentId;
+            resp.notify = `/tmp/claw_notify_${agentId}`;
+            resp.recv = `claw-link bridge recv --agent ${agentId} --wait 30`;
+            resp.hookCheck = `[ -s /tmp/claw_notify_${agentId} ]`;
+          }
+          return this._json(res, 200, resp);
+        }
+
         const pendingKey = resolvedRoom || '_pending_' + Date.now();
         const room = this._initRoom(pendingKey);
         this._connectRoom(room, resolvedRoom || null);
@@ -542,9 +615,17 @@ class ClawBridge {
           room.eventsPath = path.join(room.dataDir, 'events.jsonl');
           this.rooms.set(actualId, room);
         }
+        if (agentId) room.getAgent(agentId);
         const invite = generateInvite(actualId, { signal: this.signalingUrl, creator: this.name, perm: this.permission });
         const invitePath = writeInvite(invite, room.dataDir);
-        return this._json(res, 200, { roomId: actualId, inbox: room.inboxPath, invite: invitePath });
+        const resp = { roomId: actualId, inbox: room.inboxPath, invite: invitePath };
+        if (agentId) {
+          resp.agentId = agentId;
+          resp.notify = `/tmp/claw_notify_${agentId}`;
+          resp.recv = `claw-link bridge recv --agent ${agentId} --wait 30`;
+          resp.hookCheck = `[ -s /tmp/claw_notify_${agentId} ]`;
+        }
+        return this._json(res, 200, resp);
       }
 
       // GET /rooms
@@ -558,6 +639,7 @@ class ClawBridge {
             permission: room.negotiatedPerm,
             unread: room.unread.length,
             total: room.msgCount,
+            agents: [...room.agentQueues.entries()].map(([id, a]) => ({ id, unread: a.unread.length })),
           });
         }
         return this._json(res, 200, list);
@@ -581,6 +663,7 @@ class ClawBridge {
           silenceSec: room._lastPeerActivity ? Math.round((Date.now() - room._lastPeerActivity) / 1000) : null,
           reconnectAttempt: room.reconnectAttempt,
           inbox: room.inboxPath,
+          agents: [...room.agentQueues.entries()].map(([id, a]) => ({ id, unread: a.unread.length })),
         });
       }
 
@@ -589,12 +672,18 @@ class ClawBridge {
         const body = await this._readBody(req);
         const rid = this._resolveAlias(body.roomId);
         const room = rid ? this.rooms.get(rid) : this.rooms.values().next().value;
-        if (!room) return this._json(res, 404, { error: 'No room' });
+        if (!room) return this._json(res, 404, { error: 'No room', hint: 'Connect first: claw-link bridge connect [room-id]' });
         if (!room.transport || !room.transport.connected) {
-          return this._json(res, 409, { error: `Room '${room.roomId}' not connected` });
+          return this._json(res, 409, { error: `Room '${room.roomId}' not connected`, hint: 'Peer has not joined yet. Check: claw-link bridge status' });
         }
         const envelope = this._buildEnvelope(body);
         room.transport.send(envelope);
+        if (body.agentId) {
+          if (!RoomState.validAgentId(body.agentId)) {
+            return this._json(res, 400, { error: 'Invalid agentId: only alphanumeric, hyphen and underscore (max 64 chars)' });
+          }
+          room.trackOrigin(envelope.id, body.agentId);
+        }
         // Track in pending queue (ACK not needed for ack messages)
         if (envelope.type !== 'ack') {
           room.addPending(envelope);
@@ -618,25 +707,29 @@ class ClawBridge {
         return this._json(res, 200, { ok: true, id: envelope.id, roomId: room.roomId });
       }
 
-      // GET /recv?room=X&wait=N&all=1&limit=N
+      // GET /recv?room=X&agent=Y&wait=N&all=1&limit=N
       if (method === 'GET' && pathname === '/recv') {
         const rid = this._resolveAlias(url.searchParams.get('room'));
+        const agentId = url.searchParams.get('agent') || null;
+        if (agentId && !RoomState.validAgentId(agentId)) {
+          return this._json(res, 400, { error: 'Invalid agentId: only alphanumeric, hyphen and underscore (max 64 chars)' });
+        }
         const room = rid ? this.rooms.get(rid) : this.rooms.values().next().value;
         if (!room) return this._json(res, 200, []);
 
         if (url.searchParams.get('all') === '1') {
           return this._json(res, 200, room.readAllInbox());
         }
+        const queue = agentId ? room.getAgent(agentId) : room;
         const limit = parseInt(url.searchParams.get('limit') || '0', 10);
         const waitSec = parseInt(url.searchParams.get('wait') || '0', 10);
-        if (room.unread.length > 0 || waitSec <= 0) {
-          // Sort by priority (high first), then by arrival order
-          room.unread.sort((a, b) => (b.priority || 1) - (a.priority || 1));
-          const batch = limit > 0 ? room.unread.splice(0, limit) : room.unread.splice(0);
+        if (queue.unread.length > 0 || waitSec <= 0) {
+          queue.unread.sort((a, b) => (b.priority || 1) - (a.priority || 1));
+          const batch = limit > 0 ? queue.unread.splice(0, limit) : queue.unread.splice(0);
           return this._json(res, 200, batch);
         }
         const clamped = Math.min(Math.max(waitSec, 1), 120);
-        let msgs = await this._longPoll(room, clamped);
+        let msgs = await this._longPoll(queue, clamped);
         msgs.sort((a, b) => (b.priority || 1) - (a.priority || 1));
         if (limit > 0) msgs = msgs.slice(0, limit);
         return this._json(res, 200, msgs);
@@ -695,7 +788,7 @@ class ClawBridge {
           return this._json(res, 400, { error: 'level must be intimate|helper|chat' });
         }
         const room = rid ? this.rooms.get(rid) : this.rooms.values().next().value;
-        if (!room) return this._json(res, 404, { error: 'No room' });
+        if (!room) return this._json(res, 404, { error: 'No room', hint: 'Connect first: claw-link bridge connect [room-id]' });
         this._setRoomPerm(room.roomId, level);
         return this._json(res, 200, { ok: true, roomId: room.roomId, permission: level });
       }
@@ -797,6 +890,15 @@ class ClawBridge {
     execFile('/bin/sh', ['-c', expanded], { timeout: 10000 }, (err) => {
       if (err) this._log(`Hook '${event}' failed: ${err.message}`);
     });
+  }
+
+  // -- per-agent auto-notify ------------------------------------------------
+
+  _writeAgentNotify(agentId, data) {
+    if (!agentId) return;
+    const file = path.join('/tmp', `claw_notify_${agentId}`);
+    const line = `${data.from || ''}:${data.type || ''}:${data.id || ''}\n`;
+    try { fs.appendFileSync(file, line); } catch {}
   }
 
   // -- telegram ------------------------------------------------------------

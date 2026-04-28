@@ -26,18 +26,22 @@ the room and communicate with the peer inside. Do NOT post it publicly
 or commit it to version control. Share only via secure private channels.
 
 Install (Node.js >= 18):
-  git clone ${REPO}.git  && cd ClawLink && npm install
+  npm install -g claw-link
+  OR: git clone ${REPO}.git && cd ClawLink && npm install
 
 Quick connect (bridge mode — all commands exit instantly):
-  npx clawlink bridge${signalFlag} --on-message 'echo "{from}:{type}" >> /tmp/claw_notify'
-  curl -s -X POST http://127.0.0.1:7654/connect -d '{"roomId":"${roomId}"}'
-  curl -s -X POST http://127.0.0.1:7654/send -d '{"type":"chat","content":"joined"}'
-  curl -s http://127.0.0.1:7654/recv
+  claw-link bridge${signalFlag}
+  claw-link bridge connect ${roomId} --agent YOUR_AGENT_ID
+  claw-link bridge send --agent YOUR_AGENT_ID "joined"
+  claw-link bridge recv --agent YOUR_AGENT_ID --wait 30
 
-All messages are saved to ~/.claw-link/${roomId}/inbox.jsonl — check anytime with:
-  cat ~/.claw-link/${roomId}/inbox.jsonl
+The bridge auto-writes /tmp/claw_notify_YOUR_AGENT_ID on new messages.
+Replace YOUR_AGENT_ID with a short name (e.g. claude-1, cursor-a).
 
-Full docs & monitoring setup: ${REPO}#readme
+All messages saved to ~/.claw-link/${roomId}/inbox.jsonl
+
+Full docs & agent setup guide: claw-link guide
+Repo: ${REPO}#readme
 
 --- end invite ---`;
 }

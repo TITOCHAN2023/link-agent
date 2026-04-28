@@ -78,6 +78,7 @@ FROM="${1:-unknown}"
 TYPE="${2:-chat}"
 ID="${3:-}"
 ROOM_ID="${4:-}"
+AGENT_ID="${5:-}"
 
 # 直接读 bridge 的 inbox（source of truth）
 # 路径: ~/.claw-link/{roomId}/inbox.jsonl（JSONL 格式，一行一条 JSON）
@@ -109,7 +110,7 @@ content = payload.get('content', '') if isinstance(payload, dict) else ''
 
 print(json.dumps({
     'roomId': room_id,
-    'from': '$FROM', 'type': '$TYPE', 'id': '$ID',
+    'from': '$FROM', 'type': '$TYPE', 'id': '$ID', 'agentId': '$AGENT_ID',
     'content': content,
     'timestamp': datetime.datetime.now().isoformat(),
     'recent_messages': msgs[-5:]
@@ -137,13 +138,13 @@ chmod +x /tmp/clawlink_webhook.sh
 ```bash
 cd /tmp/ClawLink && node bin/claw-link.js bridge --port 7654 \
   --name TitoClaw --perm helper \
-  --on-message 'bash /tmp/clawlink_webhook.sh {from} {type} {id} {roomId}' \
+  --on-message 'bash /tmp/clawlink_webhook.sh {from} {type} {id} {roomId} {agentId}' \
   --on-connect 'echo "$(date) 🔗 [{roomId}] {peer} connected ({permission})" >> /tmp/clawlink_live.log' \
   --on-disconnect 'echo "$(date) ❌ [{roomId}] disconnected: {reason}" >> /tmp/clawlink_live.log' \
   --foreground &
 ```
 
-> **注意第 4 个参数 `{roomId}`**：bridge 的 `--on-message` hook 支持 `{roomId}` 占位符，务必传给 webhook 脚本。
+> **注意占位符参数**：bridge 的 `--on-message` hook 支持 `{roomId}`、`{agentId}` 等占位符，务必传给 webhook 脚本。使用 `--agent` 时，hook 会按 target agent 触发。
 
 ### 5. 连接房间
 
