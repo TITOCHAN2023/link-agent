@@ -1,24 +1,24 @@
 'use strict';
 
 const readline = require('readline');
-const { ClawTransport } = require('./transport');
+const { AgentTransport } = require('./transport');
 const proto = require('./protocol');
 const { generateInvite, writeInvite } = require('./invite');
 
 /**
- * ClawAgent — non-interactive JSON-lines interface for AI agents.
+ * AgentJSON — non-interactive JSON-lines interface for AI agents.
  *
  * stdout: one JSON object per line (events from transport)
  * stdin:  one JSON object per line (messages to send)
  *
  * No chalk, no prompts, no interactive readline. Pure machine protocol.
  */
-class ClawAgent {
+class AgentJSON {
   constructor({ signalingUrl = 'wss://ginfo.cc/signal/', name = 'Claw', permission = 'helper', room }) {
     this.signalingUrl = signalingUrl;
     this.name = name;
     this.permission = permission;
-    this.transport = new ClawTransport({ signalingUrl, name, permission, room });
+    this.transport = new AgentTransport({ signalingUrl, name, permission, room });
     this._rl = null;
   }
 
@@ -125,4 +125,4 @@ class ClawAgent {
   }
 }
 
-module.exports = { ClawAgent };
+module.exports = { AgentJSON };

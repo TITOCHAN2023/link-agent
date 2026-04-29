@@ -3,10 +3,10 @@
 const fs = require('fs');
 const path = require('path');
 
-const RC_NAME = '.clawlinkrc';
+const RC_NAME = '.agentlinkrc';
 
 /**
- * Load .clawlinkrc from CWD → HOME, first found wins.
+ * Load .agentlinkrc from CWD → HOME, first found wins.
  * Returns plain object (empty if no rc found).
  */
 function loadRC() {

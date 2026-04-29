@@ -2,7 +2,7 @@
 
 const readline = require('readline');
 const chalk = require('chalk');
-const { ClawTransport } = require('./transport');
+const { AgentTransport } = require('./transport');
 const { canPerform, isPrivate, describe } = require('./permissions');
 const { SessionManager } = require('./session');
 const proto = require('./protocol');
@@ -14,10 +14,10 @@ function sanitize(str) {
   return str.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]|\x1b\[[0-9;]*[A-Za-z]/g, '');
 }
 
-class ClawClient {
+class AgentClient {
   constructor({ signalingUrl, name = 'Claw', permission = 'helper', room }) {
     this.name = name;
-    this.transport = new ClawTransport({ signalingUrl, name, permission, room });
+    this.transport = new AgentTransport({ signalingUrl, name, permission, room });
     this.rl = null;
     this.sessionMgr = null;
   }
@@ -169,4 +169,4 @@ class ClawClient {
   }
 }
 
-module.exports = { ClawClient };
+module.exports = { AgentClient };

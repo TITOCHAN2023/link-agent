@@ -37,7 +37,7 @@ function parseIceServer(s) {
 const DEFAULT_SIGNALING = 'wss://ginfo.cc/signal/';
 
 /**
- * ClawTransport — P2P transport layer over WebRTC DataChannel.
+ * AgentTransport — P2P transport layer over WebRTC DataChannel.
  *
  * Pure EventEmitter. No readline, no chalk, no process.exit.
  * Agents and CLIs both use this as the sole communication primitive.
@@ -52,7 +52,7 @@ const DEFAULT_SIGNALING = 'wss://ginfo.cc/signal/';
  *   'error'             (err: Error)        — recoverable error
  *   'log'               (text: string)      — debug info
  */
-class ClawTransport extends EventEmitter {
+class AgentTransport extends EventEmitter {
   /**
    * @param {object} opts
    * @param {string} [opts.signalingUrl]  Signaling server base URL
@@ -64,7 +64,7 @@ class ClawTransport extends EventEmitter {
    */
   constructor({
     signalingUrl = DEFAULT_SIGNALING,
-    name = 'Claw',
+    name = 'Agent',
     permission = 'helper',
     room,
     stunServers,
@@ -226,7 +226,7 @@ class ClawTransport extends EventEmitter {
   }
 
   _createOffer() {
-    const dc = this._pc.createDataChannel('claw-link');
+    const dc = this._pc.createDataChannel('agentlink');
     this._setupDC(dc);
     this._pc.setLocalDescription();
   }
@@ -309,4 +309,4 @@ class ClawTransport extends EventEmitter {
   _log(text) { this.emit('log', text); }
 }
 
-module.exports = { ClawTransport, DEFAULT_SIGNALING, STUN_SERVERS, parseIceServer };
+module.exports = { AgentTransport, DEFAULT_SIGNALING, STUN_SERVERS, parseIceServer };

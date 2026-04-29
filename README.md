@@ -1,4 +1,4 @@
-# claw-link
+# agentlink
 
 P2P encrypted communication between Claw, Agent, and so on instances via WebRTC.
 
@@ -6,7 +6,7 @@ P2P encrypted communication between Claw, Agent, and so on instances via WebRTC.
 
 ## Agent Capability Levels
 
-Not all agents are equal. claw-link provides three integration modes matched to what the agent can actually do:
+Not all agents are equal. agentlink provides three integration modes matched to what the agent can actually do:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -19,7 +19,7 @@ Not all agents are equal. claw-link provides three integration modes matched to 
 │         │                      │                    │        │
 │         ▼                      ▼                    ▼        │
 │  ┌─────────────┐        ┌──────────────┐      ┌───────────┐ │
-│  │   Bridge     │        │  ClawAgent   │      │ Transport │ │
+│  │   Bridge     │        │  AgentAgent   │      │ Transport │ │
 │  │ (HTTP+Queue) │        │ (JSON lines) │      │ (EventEmit│ │
 │  └──────┬──────┘        └──────┬───────┘      └─────┬─────┘ │
 │         └──────────────────────┴────────────────────┘        │
@@ -37,23 +37,23 @@ Not all agents are equal. claw-link provides three integration modes matched to 
 | Pipe stdin/stdout in real-time | no | yes | yes |
 | `require()` Node.js modules | no | no | yes |
 | **Examples** | Simple ReAct agent, tool-call-only agent, most MCP clients | Claude Code, Cursor, Cline, aider | Custom Node.js agent, OpenClaw runtime |
-| **Use mode** | `claw-link bridge` | `claw-link connect --json` | `require('claw-link')` |
+| **Use mode** | `agentlink bridge` | `agentlink connect --json` | `require('agentlink')` |
 
 ---
 
 ## L1: Bridge Mode (serial agents)
 
-**Problem**: L1 agent runs `claw-link connect`, the process never exits, agent freezes.
+**Problem**: L1 agent runs `agentlink connect`, the process never exits, agent freezes.
 
 **Solution**: The bridge runs in the background. Agent talks to it via one-shot HTTP calls. Messages queue up and wait. Hooks wake the agent when something arrives.
 
 ### Setup
 
-> **Do NOT mix bridge mode with direct mode.** Use `claw-link bridge connect`, NOT `claw-link connect`. The direct `connect` command (L2) creates a separate P2P connection that will **kick the bridge out of the room**. All operations on a bridged room must go through `claw-link bridge ...` commands.
+> **Do NOT mix bridge mode with direct mode.** Use `agentlink bridge connect`, NOT `agentlink connect`. The direct `connect` command (L2) creates a separate P2P connection that will **kick the bridge out of the room**. All operations on a bridged room must go through `agentlink bridge ...` commands.
 
 ```bash
 # Start bridge in background (once)
-claw-link bridge --port 7654 --name MyClaw --perm helper
+agentlink bridge --port 7654 --name MyClaw --perm helper
 ```
 
 ### Full workflow — CLI commands (recommended)
@@ -62,47 +62,47 @@ Built-in CLI commands talk to the bridge directly — no curl, no JSON body cons
 
 ```bash
 # 1. Connect to a room with your agent identity
-claw-link bridge connect --agent my-agent
-# → {"roomId":"a1b2c3d4","agentId":"my-agent","notify":"/tmp/claw_notify_my-agent",...}
+agentlink bridge connect --agent my-agent
+# → {"roomId":"a1b2c3d4","agentId":"my-agent","notify":"/tmp/agentlink_notify_my-agent",...}
 
 # Or join an existing room:
-claw-link bridge connect a1b2c3d4 --agent my-agent
+agentlink bridge connect a1b2c3d4 --agent my-agent
 
 # 2. Share roomId SECURELY with the other agent (private channel only!)
 #    The Room ID IS the auth token — anyone who has it can join.
 
 # 3. Other agent connects on their bridge (same room, different agent identity):
-claw-link bridge connect a1b2c3d4 --agent peer-agent
+agentlink bridge connect a1b2c3d4 --agent peer-agent
 
 # 4. Send a message
-claw-link bridge send --agent my-agent "Hello from MyClaw"
+agentlink bridge send --agent my-agent "Hello from MyClaw"
 # → {"ok":true,"id":"msg123","roomId":"a1b2c3d4"}
 
 # Send other message types:
-claw-link bridge send --agent my-agent -t task --desc "review app.js" --data '{"file":"app.js"}'
-claw-link bridge send --agent my-agent -t query "what framework are you using?"
+agentlink bridge send --agent my-agent -t task --desc "review app.js" --data '{"file":"app.js"}'
+agentlink bridge send --agent my-agent -t query "what framework are you using?"
 
 # 5. Poll for reply (per-agent queue, long-poll)
-claw-link bridge recv --agent my-agent --wait 10
+agentlink bridge recv --agent my-agent --wait 10
 # → [{"id":"...","type":"result","payload":{...},"from":"PeerClaw",...}]
 
 # 6. Check connection status anytime
-claw-link bridge status
+agentlink bridge status
 # → {"connected":true,"roomId":"a1b2c3d4","peer":"PeerClaw","agents":["my-agent"],...}
 
 # 7. List all rooms
-claw-link bridge rooms
+agentlink bridge rooms
 
 # 8. Done — disconnect
-claw-link bridge close a1b2c3d4
+agentlink bridge close a1b2c3d4
 ```
 
 All commands support `--port <port>` (default: 7654) and `--room <roomId>` where applicable.
-The bridge auto-writes `/tmp/claw_notify_{agentId}` when messages arrive — no `--on-message` needed.
+The bridge auto-writes `/tmp/agentlink_notify_{agentId}` when messages arrive — no `--on-message` needed.
 
 ### Full workflow — curl (alternative)
 
-If you prefer raw HTTP calls or your environment doesn't have claw-link installed:
+If you prefer raw HTTP calls or your environment doesn't have agentlink installed:
 
 ```bash
 curl -s -X POST http://127.0.0.1:7654/connect -d '{"agentId":"my-agent"}'
@@ -116,18 +116,18 @@ curl -s -X POST http://127.0.0.1:7654/close
 
 ### Message Monitoring (IMPORTANT — read this carefully)
 
-> **When using `--agent`, the bridge automatically writes notification files to `/tmp/claw_notify_{agentId}` on every incoming message. You just need a way to CHECK that file periodically.** Without `--agent`, set up `--on-message` hooks manually.
+> **When using `--agent`, the bridge automatically writes notification files to `/tmp/agentlink_notify_{agentId}` on every incoming message. You just need a way to CHECK that file periodically.** Without `--agent`, set up `--on-message` hooks manually.
 
-The bridge persists all messages to `~/.claw-link/<roomId>/inbox.jsonl` — nothing is ever lost. But you need a way to **know when new messages arrive** so you can respond.
+The bridge persists all messages to `~/.agentlink/<roomId>/inbox.jsonl` — nothing is ever lost. But you need a way to **know when new messages arrive** so you can respond.
 
 #### Option 1: Claude Code — hooks + CLAUDE.md
 
-The bridge **automatically** writes notification files per agent at `/tmp/claw_notify_{agentId}`. No `--on-message` flag needed — just start the bridge and connect with `--agent`.
+The bridge **automatically** writes notification files per agent at `/tmp/agentlink_notify_{agentId}`. No `--on-message` flag needed — just start the bridge and connect with `--agent`.
 
 **Step 1.** Start bridge (no special flags needed):
 
 ```bash
-claw-link bridge
+agentlink bridge
 ```
 
 **Step 2.** Add hook in `.claude/settings.json` — fires after every tool call, checks YOUR notification file:
@@ -141,7 +141,7 @@ claw-link bridge
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -s /tmp/claw_notify_claude-a ]; then echo '[ClawLink] New messages waiting — run: claw-link bridge recv --agent claude-a'; fi"
+            "command": "if [ -s /tmp/agentlink_notify_claude-a ]; then echo '[AgentLink] New messages waiting — run: agentlink bridge recv --agent claude-a'; fi"
           }
         ]
       }
@@ -155,47 +155,47 @@ claw-link bridge
 **Step 3.** Add to your project's `CLAUDE.md`:
 
 ```markdown
-## ClawLink
+## AgentLink
 
-You have access to claw-link for P2P communication with other agents.
+You have access to agentlink for P2P communication with other agents.
 Your agent identity is: claude-a
 
-- Connect: `claw-link bridge connect ROOM_ID --agent claude-a`
-- Send: `claw-link bridge send --agent claude-a "your message"`
-- Receive: `claw-link bridge recv --agent claude-a --wait 5`
-- Status: `claw-link bridge status`
-- Full usage: `claw-link guide`
+- Connect: `agentlink bridge connect ROOM_ID --agent claude-a`
+- Send: `agentlink bridge send --agent claude-a "your message"`
+- Receive: `agentlink bridge recv --agent claude-a --wait 5`
+- Status: `agentlink bridge status`
+- Full usage: `agentlink guide`
 
-When you see "[ClawLink] New messages waiting" in hook output, immediately
-run `claw-link bridge recv --agent claude-a` to read and respond. After
-responding, clear the notification: `> /tmp/claw_notify_claude-a`
+When you see "[AgentLink] New messages waiting" in hook output, immediately
+run `agentlink bridge recv --agent claude-a` to read and respond. After
+responding, clear the notification: `> /tmp/agentlink_notify_claude-a`
 ```
 
 > **No agentId?** Everything still works without `--agent` — single-agent mode uses a shared queue. Auto-notification only fires for registered agents; use `--on-message` hook for custom notification without agentId.
 
 #### Option 2: Cursor / Windsurf — rules file
 
-Add to `.cursor/rules/clawlink.mdc` (Cursor) or `.windsurfrules` (Windsurf):
+Add to `.cursor/rules/agentlink.mdc` (Cursor) or `.windsurfrules` (Windsurf):
 
 ```markdown
 ---
-description: ClawLink P2P agent communication
+description: AgentLink P2P agent communication
 globs: *
 alwaysApply: true
 ---
 
-## ClawLink Integration
+## AgentLink Integration
 
-A claw-link bridge is running on port 7654. Your agent identity is: cursor-a
+A agentlink bridge is running on port 7654. Your agent identity is: cursor-a
 
 Commands (run in terminal):
-- `claw-link bridge connect ROOM --agent cursor-a` — connect with identity
-- `claw-link bridge recv --agent cursor-a --wait 5` — check for new messages
-- `claw-link bridge send --agent cursor-a "message"` — send a chat message
-- `claw-link bridge status` — check connection status
-- `claw-link guide` — full command reference
+- `agentlink bridge connect ROOM --agent cursor-a` — connect with identity
+- `agentlink bridge recv --agent cursor-a --wait 5` — check for new messages
+- `agentlink bridge send --agent cursor-a "message"` — send a chat message
+- `agentlink bridge status` — check connection status
+- `agentlink guide` — full command reference
 
-When completing a task or waiting for input, check for claw-link messages.
+When completing a task or waiting for input, check for agentlink messages.
 Respond promptly to incoming messages.
 ```
 
@@ -204,13 +204,13 @@ Respond promptly to incoming messages.
 Add to `.clinerules`:
 
 ```
-# ClawLink bridge is running on port 7654. Your agent identity: cline-a
-# Connect:  claw-link bridge connect ROOM --agent cline-a
-# Receive:  claw-link bridge recv --agent cline-a --wait 5
-# Send:     claw-link bridge send --agent cline-a "your message"
-# Full guide: claw-link guide
+# AgentLink bridge is running on port 7654. Your agent identity: cline-a
+# Connect:  agentlink bridge connect ROOM --agent cline-a
+# Receive:  agentlink bridge recv --agent cline-a --wait 5
+# Send:     agentlink bridge send --agent cline-a "your message"
+# Full guide: agentlink guide
 #
-# After finishing a task, check for incoming claw-link messages.
+# After finishing a task, check for incoming agentlink messages.
 ```
 
 #### Option 4: Any agent — poll loop (fallback)
@@ -219,32 +219,32 @@ If your agent has no hook/rules system, just poll with `--agent`:
 
 ```bash
 # Connect with agent identity (bridge auto-writes notification file)
-claw-link bridge connect ROOM --agent my-agent
+agentlink bridge connect ROOM --agent my-agent
 
 # Check for messages anytime:
-claw-link bridge recv --agent my-agent
+agentlink bridge recv --agent my-agent
 
 # Or long-poll (blocks until message or timeout):
-claw-link bridge recv --agent my-agent --wait 30
+agentlink bridge recv --agent my-agent --wait 30
 
 # Full inbox history (shared, all agents):
-claw-link bridge recv --all
+agentlink bridge recv --all
 ```
 
-The bridge auto-writes `/tmp/claw_notify_my-agent` when messages arrive. Poll it in your work loop:
+The bridge auto-writes `/tmp/agentlink_notify_my-agent` when messages arrive. Poll it in your work loop:
 ```bash
-if [ -s /tmp/claw_notify_my-agent ]; then claw-link bridge recv --agent my-agent; > /tmp/claw_notify_my-agent; fi
+if [ -s /tmp/agentlink_notify_my-agent ]; then agentlink bridge recv --agent my-agent; > /tmp/agentlink_notify_my-agent; fi
 ```
 
-Messages persist to `~/.claw-link/<roomId>/inbox.jsonl` — nothing is ever lost, even if you check hours later.
+Messages persist to `~/.agentlink/<roomId>/inbox.jsonl` — nothing is ever lost, even if you check hours later.
 
 ### Notification Adapters (recommended)
 
-Configure once in `.clawlinkrc` — all events (connect, message, disconnect) are delivered automatically with full payload:
+Configure once in `.agentlinkrc` — all events (connect, message, disconnect) are delivered automatically with full payload:
 
 ```json
 {
-  "notify": { "type": "webhook", "url": "http://localhost:8080/clawlink" }
+  "notify": { "type": "webhook", "url": "http://localhost:8080/agentlink" }
 }
 ```
 
@@ -283,19 +283,19 @@ Multiple agents on the same machine can share one bridge and even the same room.
 
 ```bash
 # Agent A connects with identity
-claw-link bridge connect my-room --agent agent-a
+agentlink bridge connect my-room --agent agent-a
 
 # Agent B connects to the same room — transport is reused, not destroyed
-claw-link bridge connect my-room --agent agent-b
+agentlink bridge connect my-room --agent agent-b
 
 # Agent A sends a task (origin tracked)
-claw-link bridge send --agent agent-a -t task --desc "review app.js"
+agentlink bridge send --agent agent-a -t task --desc "review app.js"
 
 # Agent A polls its own queue — only gets replies to its own messages
-claw-link bridge recv --agent agent-a --wait 30
+agentlink bridge recv --agent agent-a --wait 30
 
 # Agent B polls its own queue — gets broadcast messages + replies to its own messages
-claw-link bridge recv --agent agent-b --wait 30
+agentlink bridge recv --agent agent-b --wait 30
 ```
 
 Or via curl:
@@ -374,10 +374,10 @@ Agent runs a background process, reads stdout line by line, writes to stdin.
 
 ```bash
 # First peer — omit room-id to auto-generate:
-claw-link connect --name MyClaw --perm helper --json
+agentlink connect --name MyClaw --perm helper --json
 
 # Second peer — provide the room-id:
-claw-link connect a1b2c3d4 --name PeerClaw --perm helper --json
+agentlink connect a1b2c3d4 --name PeerClaw --perm helper --json
 ```
 
 ### stdout events (read these)
@@ -407,10 +407,10 @@ claw-link connect a1b2c3d4 --name PeerClaw --perm helper --json
 ## L3: Node API (in-process agents)
 
 ```javascript
-const { ClawTransport, protocol } = require('claw-link');
+const { AgentTransport, protocol } = require('agentlink');
 
 // Create room
-const t = new ClawTransport({ name: 'MyClaw', permission: 'helper' });
+const t = new AgentTransport({ name: 'MyClaw', permission: 'helper' });
 t.on('room', (roomId) => { /* share roomId with peer */ });
 t.on('connected', (peer, perm) => {
   t.send(protocol.task('review this code', { file: 'app.js' }, 'MyClaw'));
@@ -421,7 +421,7 @@ t.on('message', (msg) => {
 t.connect();
 
 // Join room (peer side)
-const peer = new ClawTransport({ name: 'Peer', room: 'a1b2c3d4' });
+const peer = new AgentTransport({ name: 'Peer', room: 'a1b2c3d4' });
 peer.on('message', (msg) => {
   peer.send(protocol.result({ status: 'done' }, 'Peer', msg.id));
 });
@@ -509,7 +509,7 @@ Peer A                    Signal Server              Peer B
 
 ## P2P Connection Success Rate
 
-claw-link uses WebRTC for direct peer-to-peer communication. Connection success depends on both peers' network type (NAT). **There is no TURN relay server** — all traffic is direct P2P via STUN hole-punching.
+agentlink uses WebRTC for direct peer-to-peer communication. Connection success depends on both peers' network type (NAT). **There is no TURN relay server** — all traffic is direct P2P via STUN hole-punching.
 
 **Estimated success rate: ~80% overall.** Breakdown by scenario:
 
@@ -529,13 +529,13 @@ claw-link uses WebRTC for direct peer-to-peer communication. Connection success 
 - **Same machine / LAN**: always works, no worries
 - **Cross-internet**: works ~80% of the time. If it doesn't connect within 60s, your NAT is likely Symmetric
 - **Corporate/mobile networks**: try connecting from a different network (home WiFi, hotspot), or deploy one peer on a cloud VM with a public IP
-- **Self-host TURN**: run [coturn](https://github.com/coturn/coturn) and pass custom ICE servers via `new ClawTransport({ stunServers: [...] })`
+- **Self-host TURN**: run [coturn](https://github.com/coturn/coturn) and pass custom ICE servers via `new AgentTransport({ stunServers: [...] })`
 
 ---
 
-## Configuration (.clawlinkrc)
+## Configuration (.agentlinkrc)
 
-Place a `.clawlinkrc` file (JSON) in your project directory or home directory. CLI args override rc values.
+Place a `.agentlinkrc` file (JSON) in your project directory or home directory. CLI args override rc values.
 
 ```json
 {
@@ -543,7 +543,7 @@ Place a `.clawlinkrc` file (JSON) in your project directory or home directory. C
   "permission": "helper",
   "port": 7654,
   "signalingUrl": "wss://ginfo.cc/signal/",
-  "dataDir": "~/.claw-link",
+  "dataDir": "~/.agentlink",
   "defaultRoom": "my-room",
   "aliases": {
     "stable": "my-stable-room-id",
@@ -553,7 +553,7 @@ Place a `.clawlinkrc` file (JSON) in your project directory or home directory. C
   "tgChatId": "987654321",
   "notify": {
     "type": "webhook",
-    "url": "http://localhost:8080/clawlink"
+    "url": "http://localhost:8080/agentlink"
   },
   "hooks": {
     "onConnect": "echo connected",
@@ -565,31 +565,31 @@ Place a `.clawlinkrc` file (JSON) in your project directory or home directory. C
 
 **Room aliases**: use short names in place of room IDs everywhere — CLI, HTTP API, even `curl`:
 ```bash
-claw-link connect stable              # resolves to "my-stable-room-id"
+agentlink connect stable              # resolves to "my-stable-room-id"
 curl -X POST .../connect -d '{"roomId":"dev"}'   # resolves to "my-dev-room-id"
 ```
 
 **Environment variables**:
 | Variable | Effect |
 |----------|--------|
-| `CLAWLINK_AGENT_ID` | Default agentId for all CLI commands (per-session, not shared) |
-| `CLAWLINK_TG_TOKEN` | Telegram bot token |
-| `CLAWLINK_TG_CHAT` | Telegram chat ID |
+| `AGENTLINK_AGENT_ID` | Default agentId for all CLI commands (per-session, not shared) |
+| `AGENTLINK_TG_TOKEN` | Telegram bot token |
+| `AGENTLINK_TG_CHAT` | Telegram chat ID |
 
-**Priority**: CLI flags > environment variables > .clawlinkrc > defaults
+**Priority**: CLI flags > environment variables > .agentlinkrc > defaults
 
 ---
 
 ## Human CLI
 
 ```bash
-git clone https://github.com/TITOCHAN2023/ClawLink.git
-cd ClawLink && npm install
+git clone https://github.com/TITOCHAN2023/AgentLink.git
+cd AgentLink && npm install
 
-claw-link connect --name ClawA          # Create room (interactive)
-claw-link connect <room-id> --name ClawB  # Join room (interactive)
-claw-link server --port 8765           # Local signaling server
-claw-link ping wss://ginfo.cc/signal/  # Test connectivity
+agentlink connect --name ClawA          # Create room (interactive)
+agentlink connect <room-id> --name ClawB  # Join room (interactive)
+agentlink server --port 8765           # Local signaling server
+agentlink ping wss://ginfo.cc/signal/  # Test connectivity
 ```
 
 ### Telegram Bot Notifications
@@ -599,17 +599,17 @@ Bind a Telegram bot to monitor all rooms and remotely kill them. Agents don't ne
 **Setup via CLI flags:**
 
 ```bash
-claw-link bridge --tg-token "123456:ABC-DEF..." --tg-chat "987654321"
+agentlink bridge --tg-token "123456:ABC-DEF..." --tg-chat "987654321"
 ```
 
 **Or set once via environment variables (recommended):**
 
 ```bash
-export CLAWLINK_TG_TOKEN="123456:ABC-DEF..."
-export CLAWLINK_TG_CHAT="987654321"
+export AGENTLINK_TG_TOKEN="123456:ABC-DEF..."
+export AGENTLINK_TG_CHAT="987654321"
 ```
 
-After this, every `claw-link bridge` will auto-bind TG with no extra flags.
+After this, every `agentlink bridge` will auto-bind TG with no extra flags.
 
 **What you see in Telegram:**
 
@@ -635,9 +635,9 @@ After this, every `claw-link bridge` will auto-bind TG with no extra flags.
 
 ```
 src/
-  bridge.js         ClawBridge — HTTP API + message queue + hooks (L1)
-  agent.js          ClawAgent — JSON lines stdin/stdout (L2)
-  transport.js      ClawTransport — P2P EventEmitter core (L3)
+  bridge.js         AgentBridge — HTTP API + message queue + hooks (L1)
+  agent.js          AgentAgent — JSON lines stdin/stdout (L2)
+  transport.js      AgentTransport — P2P EventEmitter core (L3)
   protocol.js       Message envelope + type constructors
   client.js         Interactive terminal UI (humans)
   cli.js            CLI entry (connect/bridge/server/ping)

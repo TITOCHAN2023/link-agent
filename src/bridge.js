@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const { execFile } = require('child_process');
-const { ClawTransport } = require('./transport');
+const { AgentTransport } = require('./transport');
 const proto = require('./protocol');
 const { generateInvite, writeInvite } = require('./invite');
 const { TelegramNotifier } = require('./tg');
@@ -190,7 +190,7 @@ class RoomState {
 }
 
 /**
- * ClawBridge — multi-room HTTP bridge for serial agents.
+ * AgentBridge — multi-room HTTP bridge for serial agents.
  *
  * HTTP API (all endpoints accept roomId to target a specific room):
  *   POST /connect {roomId?, agentId?}   → connect to room (reuses transport if active)
@@ -201,12 +201,12 @@ class RoomState {
  *   GET  /rooms                         → list all rooms
  *   GET  /health                        → liveness
  */
-class ClawBridge {
+class AgentBridge {
   constructor({
     port = 7654,
     maxPortRetries = 10,
     signalingUrl = 'wss://ginfo.cc/signal/',
-    name = 'Claw',
+    name = 'Agent',
     permission = 'helper',
     dataDir,
     onConnect,
@@ -237,8 +237,8 @@ class ClawBridge {
     this.rooms = new Map();
 
     // Telegram
-    const finalToken = tgToken || process.env.CLAWLINK_TG_TOKEN;
-    const finalChat = tgChatId || process.env.CLAWLINK_TG_CHAT;
+    const finalToken = tgToken || process.env.AGENTLINK_TG_TOKEN;
+    const finalChat = tgChatId || process.env.AGENTLINK_TG_CHAT;
     this._tg = null;
     if (finalToken && finalChat) {
       this._tg = new TelegramNotifier({
@@ -276,7 +276,7 @@ class ClawBridge {
       this.server.once('listening', () => {
         this.server.removeListener('error', onError);
         this.port = port;
-        this._baseDir = this._customDataDir || path.join(process.env.HOME || '/tmp', '.claw-link', `bridge-${this.port}`);
+        this._baseDir = this._customDataDir || path.join(process.env.HOME || '/tmp', '.agentlink', `bridge-${this.port}`);
         fs.mkdirSync(this._baseDir, { recursive: true });
         this._log(`Bridge HTTP on http://127.0.0.1:${this.port}`);
         if (this._tg) this._tg.start();
@@ -321,7 +321,7 @@ class ClawBridge {
       room: targetRoomId,
     };
     if (this._iceServers) transportOpts.iceServers = this._iceServers;
-    room.transport = new ClawTransport(transportOpts);
+    room.transport = new AgentTransport(transportOpts);
 
     // Connection timeout: if peer doesn't show up in 60s, force reconnect
     room._connectTimeout = setTimeout(() => {
@@ -591,9 +591,9 @@ class ClawBridge {
           const resp = { roomId: actualId, inbox: existing.inboxPath, invite: invitePath };
           if (agentId) {
             resp.agentId = agentId;
-            resp.notify = `/tmp/claw_notify_${agentId}`;
-            resp.recv = `claw-link bridge recv --agent ${agentId} --wait 30`;
-            resp.hookCheck = `[ -s /tmp/claw_notify_${agentId} ]`;
+            resp.notify = `/tmp/agentlink_notify_${agentId}`;
+            resp.recv = `agentlink bridge recv --agent ${agentId} --wait 30`;
+            resp.hookCheck = `[ -s /tmp/agentlink_notify_${agentId} ]`;
           }
           return this._json(res, 200, resp);
         }
@@ -626,9 +626,9 @@ class ClawBridge {
         const resp = { roomId: actualId, inbox: room.inboxPath, invite: invitePath };
         if (agentId) {
           resp.agentId = agentId;
-          resp.notify = `/tmp/claw_notify_${agentId}`;
-          resp.recv = `claw-link bridge recv --agent ${agentId} --wait 30`;
-          resp.hookCheck = `[ -s /tmp/claw_notify_${agentId} ]`;
+          resp.notify = `/tmp/agentlink_notify_${agentId}`;
+          resp.recv = `agentlink bridge recv --agent ${agentId} --wait 30`;
+          resp.hookCheck = `[ -s /tmp/agentlink_notify_${agentId} ]`;
         }
         return this._json(res, 200, resp);
       }
@@ -670,7 +670,7 @@ class ClawBridge {
           inbox: room.inboxPath,
           agents: [...room.agentQueues.entries()].map(([id, a]) => ({ id, unread: a.unread.length })),
           ...(room.reconnectAttempt >= 3 && !room.peerName ? {
-            connectionHint: 'P2P connection failing. Possible Symmetric NAT. Ask user for TURN server config: claw-link bridge --ice "turn:host:port?username=X&credential=Y"',
+            connectionHint: 'P2P connection failing. Possible Symmetric NAT. Ask user for TURN server config: agentlink bridge --ice "turn:host:port?username=X&credential=Y"',
           } : {}),
         });
       }
@@ -680,9 +680,9 @@ class ClawBridge {
         const body = await this._readBody(req);
         const rid = this._resolveAlias(body.roomId);
         const room = rid ? this.rooms.get(rid) : this.rooms.values().next().value;
-        if (!room) return this._json(res, 404, { error: 'No room', hint: 'Connect first: claw-link bridge connect [room-id]' });
+        if (!room) return this._json(res, 404, { error: 'No room', hint: 'Connect first: agentlink bridge connect [room-id]' });
         if (!room.transport || !room.transport.connected) {
-          return this._json(res, 409, { error: `Room '${room.roomId}' not connected`, hint: 'Peer has not joined yet. Check: claw-link bridge status' });
+          return this._json(res, 409, { error: `Room '${room.roomId}' not connected`, hint: 'Peer has not joined yet. Check: agentlink bridge status' });
         }
         const envelope = this._buildEnvelope(body);
         room.transport.send(envelope);
@@ -796,7 +796,7 @@ class ClawBridge {
           return this._json(res, 400, { error: 'level must be intimate|helper|chat' });
         }
         const room = rid ? this.rooms.get(rid) : this.rooms.values().next().value;
-        if (!room) return this._json(res, 404, { error: 'No room', hint: 'Connect first: claw-link bridge connect [room-id]' });
+        if (!room) return this._json(res, 404, { error: 'No room', hint: 'Connect first: agentlink bridge connect [room-id]' });
         this._setRoomPerm(room.roomId, level);
         return this._json(res, 200, { ok: true, roomId: room.roomId, permission: level });
       }
@@ -904,7 +904,7 @@ class ClawBridge {
 
   _writeAgentNotify(agentId, data) {
     if (!agentId) return;
-    const file = path.join('/tmp', `claw_notify_${agentId}`);
+    const file = path.join('/tmp', `agentlink_notify_${agentId}`);
     const line = `${data.from || ''}:${data.type || ''}:${data.id || ''}\n`;
     try { fs.appendFileSync(file, line); } catch {}
   }
@@ -939,4 +939,4 @@ class ClawBridge {
   _log(msg) { process.stderr.write(`[bridge] ${msg}\n`); }
 }
 
-module.exports = { ClawBridge };
+module.exports = { AgentBridge };

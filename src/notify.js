@@ -9,9 +9,9 @@ const { execFile } = require('child_process');
 /**
  * Unified notification adapter.
  *
- * Config (from .clawlinkrc → "notify"):
+ * Config (from .agentlinkrc → "notify"):
  *   { type: "webhook", url: "http://...", headers?: {} }
- *   { type: "file",    dir: "/tmp/clawlink-notify" }
+ *   { type: "file",    dir: "/tmp/agentlink-notify" }
  *   { type: "shell",   command: "echo {from}:{content}" }
  *   { type: "stdout" }
  *
