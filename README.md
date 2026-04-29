@@ -1,4 +1,4 @@
-# agentlink
+# Link-Agent
 
 P2P encrypted communication between Claw, Agent, and so on instances via WebRTC.
 
