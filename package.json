@@ -3,13 +3,13 @@
   "version": "0.0.2",
   "description": "P2P encrypted communication between AI agents via WebRTC DataChannel",
   "author": "ZhanpengChen <zhanpeng@ginfo.cc> (https://ginfo.cc)",
-  "homepage": "https://github.com/TITOCHAN2023/AgentLink#readme",
+  "homepage": "https://github.com/TITOCHAN2023/link-agent#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TITOCHAN2023/AgentLink.git"
+    "url": "git+https://github.com/TITOCHAN2023/link-agent.git"
   },
   "bugs": {
-    "url": "https://github.com/TITOCHAN2023/AgentLink/issues"
+    "url": "https://github.com/TITOCHAN2023/link-agent/issues"
   },
   "bin": {
     "link-agent": "bin/agentlink.js"
