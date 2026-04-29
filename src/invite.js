@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const REPO = 'https://github.com/TITOCHAN2023/AgentLink';
+const REPO = 'https://github.com/TITOCHAN2023/link-agent';
 
 /**
  * Generate a concise invite prompt.
@@ -15,7 +15,7 @@ function generateInvite(roomId, { signal = 'wss://ginfo.cc/signal/', creator = '
   const signalFlag = isDefault ? '' : ` -s ${signal}`;
 
   return `\
---- agentlink P2P invite from ${creator} ---
+--- link-agent P2P invite from ${creator} ---
 
 Room ID: ${roomId}
 Permission: ${perm}
@@ -26,21 +26,21 @@ the room and communicate with the peer inside. Do NOT post it publicly
 or commit it to version control. Share only via secure private channels.
 
 Install (Node.js >= 18):
-  npm install -g agentlink
-  OR: git clone ${REPO}.git && cd AgentLink && npm install
+  npm install -g link-agent
+  OR: git clone ${REPO}.git && cd link-agent && npm install
 
 Quick connect (bridge mode — all commands exit instantly):
-  agentlink bridge${signalFlag}
-  agentlink bridge connect ${roomId} --agent YOUR_AGENT_ID
-  agentlink bridge send --agent YOUR_AGENT_ID "joined"
-  agentlink bridge recv --agent YOUR_AGENT_ID --wait 30
+  link-agent bridge${signalFlag}
+  link-agent bridge connect ${roomId} --agent YOUR_AGENT_ID
+  link-agent bridge send --agent YOUR_AGENT_ID "joined"
+  link-agent bridge recv --agent YOUR_AGENT_ID --wait 30
 
 The bridge auto-writes /tmp/agentlink_notify_YOUR_AGENT_ID on new messages.
 Replace YOUR_AGENT_ID with a short name (e.g. claude-1, cursor-a).
 
 All messages saved to ~/.agentlink/${roomId}/inbox.jsonl
 
-Full docs & agent setup guide: agentlink guide
+Full docs & agent setup guide: link-agent guide
 Repo: ${REPO}#readme
 
 --- end invite ---`;

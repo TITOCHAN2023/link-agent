@@ -6,7 +6,7 @@ P2P encrypted communication between Claw, Agent, and so on instances via WebRTC.
 
 ## Agent Capability Levels
 
-Not all agents are equal. agentlink provides three integration modes matched to what the agent can actually do:
+Not all agents are equal. link-agent provides three integration modes matched to what the agent can actually do:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -37,23 +37,23 @@ Not all agents are equal. agentlink provides three integration modes matched to 
 | Pipe stdin/stdout in real-time | no | yes | yes |
 | `require()` Node.js modules | no | no | yes |
 | **Examples** | Simple ReAct agent, tool-call-only agent, most MCP clients | Claude Code, Cursor, Cline, aider | Custom Node.js agent, OpenClaw runtime |
-| **Use mode** | `agentlink bridge` | `agentlink connect --json` | `require('agentlink')` |
+| **Use mode** | `link-agent bridge` | `link-agent connect --json` | `require('link-agent')` |
 
 ---
 
 ## L1: Bridge Mode (serial agents)
 
-**Problem**: L1 agent runs `agentlink connect`, the process never exits, agent freezes.
+**Problem**: L1 agent runs `link-agent connect`, the process never exits, agent freezes.
 
 **Solution**: The bridge runs in the background. Agent talks to it via one-shot HTTP calls. Messages queue up and wait. Hooks wake the agent when something arrives.
 
 ### Setup
 
-> **Do NOT mix bridge mode with direct mode.** Use `agentlink bridge connect`, NOT `agentlink connect`. The direct `connect` command (L2) creates a separate P2P connection that will **kick the bridge out of the room**. All operations on a bridged room must go through `agentlink bridge ...` commands.
+> **Do NOT mix bridge mode with direct mode.** Use `link-agent bridge connect`, NOT `link-agent connect`. The direct `connect` command (L2) creates a separate P2P connection that will **kick the bridge out of the room**. All operations on a bridged room must go through `link-agent bridge ...` commands.
 
 ```bash
 # Start bridge in background (once)
-agentlink bridge --port 7654 --name MyClaw --perm helper
+link-agent bridge --port 7654 --name MyClaw --perm helper
 ```
 
 ### Full workflow — CLI commands (recommended)
@@ -62,39 +62,39 @@ Built-in CLI commands talk to the bridge directly — no curl, no JSON body cons
 
 ```bash
 # 1. Connect to a room with your agent identity
-agentlink bridge connect --agent my-agent
+link-agent bridge connect --agent my-agent
 # → {"roomId":"a1b2c3d4","agentId":"my-agent","notify":"/tmp/agentlink_notify_my-agent",...}
 
 # Or join an existing room:
-agentlink bridge connect a1b2c3d4 --agent my-agent
+link-agent bridge connect a1b2c3d4 --agent my-agent
 
 # 2. Share roomId SECURELY with the other agent (private channel only!)
 #    The Room ID IS the auth token — anyone who has it can join.
 
 # 3. Other agent connects on their bridge (same room, different agent identity):
-agentlink bridge connect a1b2c3d4 --agent peer-agent
+link-agent bridge connect a1b2c3d4 --agent peer-agent
 
 # 4. Send a message
-agentlink bridge send --agent my-agent "Hello from MyClaw"
+link-agent bridge send --agent my-agent "Hello from MyClaw"
 # → {"ok":true,"id":"msg123","roomId":"a1b2c3d4"}
 
 # Send other message types:
-agentlink bridge send --agent my-agent -t task --desc "review app.js" --data '{"file":"app.js"}'
-agentlink bridge send --agent my-agent -t query "what framework are you using?"
+link-agent bridge send --agent my-agent -t task --desc "review app.js" --data '{"file":"app.js"}'
+link-agent bridge send --agent my-agent -t query "what framework are you using?"
 
 # 5. Poll for reply (per-agent queue, long-poll)
-agentlink bridge recv --agent my-agent --wait 10
+link-agent bridge recv --agent my-agent --wait 10
 # → [{"id":"...","type":"result","payload":{...},"from":"PeerClaw",...}]
 
 # 6. Check connection status anytime
-agentlink bridge status
+link-agent bridge status
 # → {"connected":true,"roomId":"a1b2c3d4","peer":"PeerClaw","agents":["my-agent"],...}
 
 # 7. List all rooms
-agentlink bridge rooms
+link-agent bridge rooms
 
 # 8. Done — disconnect
-agentlink bridge close a1b2c3d4
+link-agent bridge close a1b2c3d4
 ```
 
 All commands support `--port <port>` (default: 7654) and `--room <roomId>` where applicable.
@@ -102,7 +102,7 @@ The bridge auto-writes `/tmp/agentlink_notify_{agentId}` when messages arrive �
 
 ### Full workflow — curl (alternative)
 
-If you prefer raw HTTP calls or your environment doesn't have agentlink installed:
+If you prefer raw HTTP calls or your environment doesn't have link-agent installed:
 
 ```bash
 curl -s -X POST http://127.0.0.1:7654/connect -d '{"agentId":"my-agent"}'
@@ -127,7 +127,7 @@ The bridge **automatically** writes notification files per agent at `/tmp/agentl
 **Step 1.** Start bridge (no special flags needed):
 
 ```bash
-agentlink bridge
+link-agent bridge
 ```
 
 **Step 2.** Add hook in `.claude/settings.json` — fires after every tool call, checks YOUR notification file:
@@ -141,7 +141,7 @@ agentlink bridge
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -s /tmp/agentlink_notify_claude-a ]; then echo '[AgentLink] New messages waiting — run: agentlink bridge recv --agent claude-a'; fi"
+            "command": "if [ -s /tmp/agentlink_notify_claude-a ]; then echo '[LinkAgent] New messages waiting — run: link-agent bridge recv --agent claude-a'; fi"
           }
         ]
       }
@@ -155,19 +155,19 @@ agentlink bridge
 **Step 3.** Add to your project's `CLAUDE.md`:
 
 ```markdown
-## AgentLink
+## LinkAgent
 
-You have access to agentlink for P2P communication with other agents.
+You have access to link-agent for P2P communication with other agents.
 Your agent identity is: claude-a
 
-- Connect: `agentlink bridge connect ROOM_ID --agent claude-a`
-- Send: `agentlink bridge send --agent claude-a "your message"`
-- Receive: `agentlink bridge recv --agent claude-a --wait 5`
-- Status: `agentlink bridge status`
-- Full usage: `agentlink guide`
+- Connect: `link-agent bridge connect ROOM_ID --agent claude-a`
+- Send: `link-agent bridge send --agent claude-a "your message"`
+- Receive: `link-agent bridge recv --agent claude-a --wait 5`
+- Status: `link-agent bridge status`
+- Full usage: `link-agent guide`
 
-When you see "[AgentLink] New messages waiting" in hook output, immediately
-run `agentlink bridge recv --agent claude-a` to read and respond. After
+When you see "[LinkAgent] New messages waiting" in hook output, immediately
+run `link-agent bridge recv --agent claude-a` to read and respond. After
 responding, clear the notification: `> /tmp/agentlink_notify_claude-a`
 ```
 
@@ -179,23 +179,23 @@ Add to `.cursor/rules/agentlink.mdc` (Cursor) or `.windsurfrules` (Windsurf):
 
 ```markdown
 ---
-description: AgentLink P2P agent communication
+description: LinkAgent P2P agent communication
 globs: *
 alwaysApply: true
 ---
 
-## AgentLink Integration
+## LinkAgent Integration
 
-A agentlink bridge is running on port 7654. Your agent identity is: cursor-a
+A link-agent bridge is running on port 7654. Your agent identity is: cursor-a
 
 Commands (run in terminal):
-- `agentlink bridge connect ROOM --agent cursor-a` — connect with identity
-- `agentlink bridge recv --agent cursor-a --wait 5` — check for new messages
-- `agentlink bridge send --agent cursor-a "message"` — send a chat message
-- `agentlink bridge status` — check connection status
-- `agentlink guide` — full command reference
+- `link-agent bridge connect ROOM --agent cursor-a` — connect with identity
+- `link-agent bridge recv --agent cursor-a --wait 5` — check for new messages
+- `link-agent bridge send --agent cursor-a "message"` — send a chat message
+- `link-agent bridge status` — check connection status
+- `link-agent guide` — full command reference
 
-When completing a task or waiting for input, check for agentlink messages.
+When completing a task or waiting for input, check for link-agent messages.
 Respond promptly to incoming messages.
 ```
 
@@ -204,13 +204,13 @@ Respond promptly to incoming messages.
 Add to `.clinerules`:
 
 ```
-# AgentLink bridge is running on port 7654. Your agent identity: cline-a
-# Connect:  agentlink bridge connect ROOM --agent cline-a
-# Receive:  agentlink bridge recv --agent cline-a --wait 5
-# Send:     agentlink bridge send --agent cline-a "your message"
-# Full guide: agentlink guide
+# LinkAgent bridge is running on port 7654. Your agent identity: cline-a
+# Connect:  link-agent bridge connect ROOM --agent cline-a
+# Receive:  link-agent bridge recv --agent cline-a --wait 5
+# Send:     link-agent bridge send --agent cline-a "your message"
+# Full guide: link-agent guide
 #
-# After finishing a task, check for incoming agentlink messages.
+# After finishing a task, check for incoming link-agent messages.
 ```
 
 #### Option 4: Any agent — poll loop (fallback)
@@ -219,21 +219,21 @@ If your agent has no hook/rules system, just poll with `--agent`:
 
 ```bash
 # Connect with agent identity (bridge auto-writes notification file)
-agentlink bridge connect ROOM --agent my-agent
+link-agent bridge connect ROOM --agent my-agent
 
 # Check for messages anytime:
-agentlink bridge recv --agent my-agent
+link-agent bridge recv --agent my-agent
 
 # Or long-poll (blocks until message or timeout):
-agentlink bridge recv --agent my-agent --wait 30
+link-agent bridge recv --agent my-agent --wait 30
 
 # Full inbox history (shared, all agents):
-agentlink bridge recv --all
+link-agent bridge recv --all
 ```
 
 The bridge auto-writes `/tmp/agentlink_notify_my-agent` when messages arrive. Poll it in your work loop:
 ```bash
-if [ -s /tmp/agentlink_notify_my-agent ]; then agentlink bridge recv --agent my-agent; > /tmp/agentlink_notify_my-agent; fi
+if [ -s /tmp/agentlink_notify_my-agent ]; then link-agent bridge recv --agent my-agent; > /tmp/agentlink_notify_my-agent; fi
 ```
 
 Messages persist to `~/.agentlink/<roomId>/inbox.jsonl` — nothing is ever lost, even if you check hours later.
@@ -283,19 +283,19 @@ Multiple agents on the same machine can share one bridge and even the same room.
 
 ```bash
 # Agent A connects with identity
-agentlink bridge connect my-room --agent agent-a
+link-agent bridge connect my-room --agent agent-a
 
 # Agent B connects to the same room — transport is reused, not destroyed
-agentlink bridge connect my-room --agent agent-b
+link-agent bridge connect my-room --agent agent-b
 
 # Agent A sends a task (origin tracked)
-agentlink bridge send --agent agent-a -t task --desc "review app.js"
+link-agent bridge send --agent agent-a -t task --desc "review app.js"
 
 # Agent A polls its own queue — only gets replies to its own messages
-agentlink bridge recv --agent agent-a --wait 30
+link-agent bridge recv --agent agent-a --wait 30
 
 # Agent B polls its own queue — gets broadcast messages + replies to its own messages
-agentlink bridge recv --agent agent-b --wait 30
+link-agent bridge recv --agent agent-b --wait 30
 ```
 
 Or via curl:
@@ -374,10 +374,10 @@ Agent runs a background process, reads stdout line by line, writes to stdin.
 
 ```bash
 # First peer — omit room-id to auto-generate:
-agentlink connect --name MyClaw --perm helper --json
+link-agent connect --name MyClaw --perm helper --json
 
 # Second peer — provide the room-id:
-agentlink connect a1b2c3d4 --name PeerClaw --perm helper --json
+link-agent connect a1b2c3d4 --name PeerClaw --perm helper --json
 ```
 
 ### stdout events (read these)
@@ -407,7 +407,7 @@ agentlink connect a1b2c3d4 --name PeerClaw --perm helper --json
 ## L3: Node API (in-process agents)
 
 ```javascript
-const { AgentTransport, protocol } = require('agentlink');
+const { AgentTransport, protocol } = require('link-agent');
 
 // Create room
 const t = new AgentTransport({ name: 'MyClaw', permission: 'helper' });
@@ -509,7 +509,7 @@ Peer A                    Signal Server              Peer B
 
 ## P2P Connection Success Rate
 
-agentlink uses WebRTC for direct peer-to-peer communication. Connection success depends on both peers' network type (NAT). **There is no TURN relay server** — all traffic is direct P2P via STUN hole-punching.
+link-agent uses WebRTC for direct peer-to-peer communication. Connection success depends on both peers' network type (NAT). **There is no TURN relay server** — all traffic is direct P2P via STUN hole-punching.
 
 **Estimated success rate: ~80% overall.** Breakdown by scenario:
 
@@ -565,7 +565,7 @@ Place a `.agentlinkrc` file (JSON) in your project directory or home directory. 
 
 **Room aliases**: use short names in place of room IDs everywhere — CLI, HTTP API, even `curl`:
 ```bash
-agentlink connect stable              # resolves to "my-stable-room-id"
+link-agent connect stable              # resolves to "my-stable-room-id"
 curl -X POST .../connect -d '{"roomId":"dev"}'   # resolves to "my-dev-room-id"
 ```
 
@@ -583,13 +583,13 @@ curl -X POST .../connect -d '{"roomId":"dev"}'   # resolves to "my-dev-room-id"
 ## Human CLI
 
 ```bash
-git clone https://github.com/TITOCHAN2023/AgentLink.git
-cd AgentLink && npm install
+git clone https://github.com/TITOCHAN2023/LinkAgent.git
+cd LinkAgent && npm install
 
-agentlink connect --name ClawA          # Create room (interactive)
-agentlink connect <room-id> --name ClawB  # Join room (interactive)
-agentlink server --port 8765           # Local signaling server
-agentlink ping wss://ginfo.cc/signal/  # Test connectivity
+link-agent connect --name ClawA          # Create room (interactive)
+link-agent connect <room-id> --name ClawB  # Join room (interactive)
+link-agent server --port 8765           # Local signaling server
+link-agent ping wss://ginfo.cc/signal/  # Test connectivity
 ```
 
 ### Telegram Bot Notifications
@@ -599,7 +599,7 @@ Bind a Telegram bot to monitor all rooms and remotely kill them. Agents don't ne
 **Setup via CLI flags:**
 
 ```bash
-agentlink bridge --tg-token "123456:ABC-DEF..." --tg-chat "987654321"
+link-agent bridge --tg-token "123456:ABC-DEF..." --tg-chat "987654321"
 ```
 
 **Or set once via environment variables (recommended):**
@@ -609,7 +609,7 @@ export AGENTLINK_TG_TOKEN="123456:ABC-DEF..."
 export AGENTLINK_TG_CHAT="987654321"
 ```
 
-After this, every `agentlink bridge` will auto-bind TG with no extra flags.
+After this, every `link-agent bridge` will auto-bind TG with no extra flags.
 
 **What you see in Telegram:**
 

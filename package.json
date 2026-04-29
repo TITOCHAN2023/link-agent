@@ -1,6 +1,6 @@
 {
   "name": "link-agent",
-  "version": "0.0.2",
+  "version": "0.0.5",
   "description": "P2P encrypted communication between AI agents via WebRTC DataChannel",
   "author": "ZhanpengChen <zhanpeng@ginfo.cc> (https://ginfo.cc)",
   "homepage": "https://github.com/TITOCHAN2023/link-agent#readme",

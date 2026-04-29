@@ -592,7 +592,7 @@ class AgentBridge {
           if (agentId) {
             resp.agentId = agentId;
             resp.notify = `/tmp/agentlink_notify_${agentId}`;
-            resp.recv = `agentlink bridge recv --agent ${agentId} --wait 30`;
+            resp.recv = `link-agent bridge recv --agent ${agentId} --wait 30`;
             resp.hookCheck = `[ -s /tmp/agentlink_notify_${agentId} ]`;
           }
           return this._json(res, 200, resp);
@@ -627,7 +627,7 @@ class AgentBridge {
         if (agentId) {
           resp.agentId = agentId;
           resp.notify = `/tmp/agentlink_notify_${agentId}`;
-          resp.recv = `agentlink bridge recv --agent ${agentId} --wait 30`;
+          resp.recv = `link-agent bridge recv --agent ${agentId} --wait 30`;
           resp.hookCheck = `[ -s /tmp/agentlink_notify_${agentId} ]`;
         }
         return this._json(res, 200, resp);
@@ -670,7 +670,7 @@ class AgentBridge {
           inbox: room.inboxPath,
           agents: [...room.agentQueues.entries()].map(([id, a]) => ({ id, unread: a.unread.length })),
           ...(room.reconnectAttempt >= 3 && !room.peerName ? {
-            connectionHint: 'P2P connection failing. Possible Symmetric NAT. Ask user for TURN server config: agentlink bridge --ice "turn:host:port?username=X&credential=Y"',
+            connectionHint: 'P2P connection failing. Possible Symmetric NAT. Ask user for TURN server config: link-agent bridge --ice "turn:host:port?username=X&credential=Y"',
           } : {}),
         });
       }
@@ -680,9 +680,9 @@ class AgentBridge {
         const body = await this._readBody(req);
         const rid = this._resolveAlias(body.roomId);
         const room = rid ? this.rooms.get(rid) : this.rooms.values().next().value;
-        if (!room) return this._json(res, 404, { error: 'No room', hint: 'Connect first: agentlink bridge connect [room-id]' });
+        if (!room) return this._json(res, 404, { error: 'No room', hint: 'Connect first: link-agent bridge connect [room-id]' });
         if (!room.transport || !room.transport.connected) {
-          return this._json(res, 409, { error: `Room '${room.roomId}' not connected`, hint: 'Peer has not joined yet. Check: agentlink bridge status' });
+          return this._json(res, 409, { error: `Room '${room.roomId}' not connected`, hint: 'Peer has not joined yet. Check: link-agent bridge status' });
         }
         const envelope = this._buildEnvelope(body);
         room.transport.send(envelope);
@@ -796,7 +796,7 @@ class AgentBridge {
           return this._json(res, 400, { error: 'level must be intimate|helper|chat' });
         }
         const room = rid ? this.rooms.get(rid) : this.rooms.values().next().value;
-        if (!room) return this._json(res, 404, { error: 'No room', hint: 'Connect first: agentlink bridge connect [room-id]' });
+        if (!room) return this._json(res, 404, { error: 'No room', hint: 'Connect first: link-agent bridge connect [room-id]' });
         this._setRoomPerm(room.roomId, level);
         return this._json(res, 200, { ok: true, roomId: room.roomId, permission: level });
       }

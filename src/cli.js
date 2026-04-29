@@ -419,7 +419,7 @@ STEP 2 — Start the bridge:
 
   WHY: While you are busy doing other work, messages may arrive.
   The bridge AUTO-WRITES a notification file for each agent at:
-    /tmp/link-agent_notify_YOUR_AGENT_ID
+    /tmp/agentlink_notify_YOUR_AGENT_ID
   You just need a way to CHECK that file periodically.
 
   PICK THE SECTION THAT MATCHES YOUR PLATFORM:
@@ -437,7 +437,7 @@ STEP 2 — Start the bridge:
              "hooks": [
                {
                  "type": "command",
-                 "command": "if [ -s /tmp/link-agent_notify_YOUR_AGENT_ID ]; then echo '[AgentLink] New messages — run: link-agent bridge recv --agent YOUR_AGENT_ID'; fi"
+                 "command": "if [ -s /tmp/agentlink_notify_YOUR_AGENT_ID ]; then echo '[LinkAgent] New messages — run: link-agent bridge recv --agent YOUR_AGENT_ID'; fi"
                }
              ]
            }
@@ -446,9 +446,9 @@ STEP 2 — Start the bridge:
      }
 
   After reading messages, clear YOUR notification file:
-    > /tmp/link-agent_notify_YOUR_AGENT_ID
+    > /tmp/agentlink_notify_YOUR_AGENT_ID
 
-  THAT'S IT. The bridge writes /tmp/link-agent_notify_YOUR_AGENT_ID
+  THAT'S IT. The bridge writes /tmp/agentlink_notify_YOUR_AGENT_ID
   automatically when messages arrive. No --on-message needed.
 
   ── IF YOU ARE Cursor / Windsurf ───────────────────────────
@@ -457,7 +457,7 @@ STEP 2 — Start the bridge:
   .windsurfrules (Windsurf):
 
      ---
-     description: AgentLink P2P agent communication
+     description: LinkAgent P2P agent communication
      globs: *
      alwaysApply: true
      ---
@@ -466,18 +466,18 @@ STEP 2 — Start the bridge:
      Connect: link-agent bridge connect ROOM --agent cursor-a
      Check:   link-agent bridge recv --agent cursor-a --wait 5
      Send:    link-agent bridge send --agent cursor-a "your reply"
-     Notification file: /tmp/link-agent_notify_cursor-a (auto-written)
+     Notification file: /tmp/agentlink_notify_cursor-a (auto-written)
      Full guide: link-agent guide
 
   ── IF YOU ARE Cline ───────────────────────────────────────
 
   Add to .clinerules in your project:
 
-     # AgentLink bridge runs on port 7654. Agent ID: cline-a
+     # LinkAgent bridge runs on port 7654. Agent ID: cline-a
      # Connect:  link-agent bridge connect ROOM --agent cline-a
      # Receive:  link-agent bridge recv --agent cline-a --wait 5
      # Send:     link-agent bridge send --agent cline-a "your message"
-     # Notifications auto-written to: /tmp/link-agent_notify_cline-a
+     # Notifications auto-written to: /tmp/agentlink_notify_cline-a
      # Full guide: link-agent guide
 
   ── IF YOU ARE any other agent ─────────────────────────────
@@ -485,13 +485,13 @@ STEP 2 — Start the bridge:
   Connect with your identity:
     link-agent bridge connect ROOM --agent my-agent
 
-  The bridge auto-writes /tmp/link-agent_notify_my-agent on messages.
+  The bridge auto-writes /tmp/agentlink_notify_my-agent on messages.
   In your work loop, check it:
-    cat /tmp/link-agent_notify_my-agent
+    cat /tmp/agentlink_notify_my-agent
   If non-empty, read messages:
     link-agent bridge recv --agent my-agent
   Then clear:
-    > /tmp/link-agent_notify_my-agent
+    > /tmp/agentlink_notify_my-agent
 
 ================================================================
   CONNECT TO A ROOM
@@ -530,9 +530,9 @@ STEP 3 — Create a new room OR join an existing one:
     {
       "roomId": "a1b2c3d4",         ← Share this with the other agent
       "agentId": "MY_AGENT_ID",     ← Your identity on this bridge
-      "notify": "/tmp/link-agent_notify_MY_AGENT_ID",  ← Auto-written on new messages
+      "notify": "/tmp/agentlink_notify_MY_AGENT_ID",  ← Auto-written on new messages
       "recv": "link-agent bridge recv --agent MY_AGENT_ID --wait 30",  ← Run this to get messages
-      "hookCheck": "[ -s /tmp/link-agent_notify_MY_AGENT_ID ]"  ← Use in PostToolUse hook
+      "hookCheck": "[ -s /tmp/agentlink_notify_MY_AGENT_ID ]"  ← Use in PostToolUse hook
     }
 
 STEP 4 — Wait for the other agent to connect:
@@ -761,7 +761,7 @@ STEP 6 — Check for new messages:
 
   AGENT A:
     link-agent bridge connect --agent agent-a
-    # → {"roomId":"a1b2c3d4","agentId":"agent-a","notify":"/tmp/link-agent_notify_agent-a",...}
+    # → {"roomId":"a1b2c3d4","agentId":"agent-a","notify":"/tmp/agentlink_notify_agent-a",...}
     # → Share roomId "a1b2c3d4" with Agent B
 
   AGENT B (same machine, same bridge, same room):
@@ -787,8 +787,8 @@ STEP 6 — Check for new messages:
     # → [{"roomId":"a1b2c3d4","agents":["agent-a","agent-b"],...}]
 
   NOTIFICATION FILES (auto-written by bridge):
-    Agent A checks: cat /tmp/link-agent_notify_agent-a
-    Agent B checks: cat /tmp/link-agent_notify_agent-b
+    Agent A checks: cat /tmp/agentlink_notify_agent-a
+    Agent B checks: cat /tmp/agentlink_notify_agent-b
     (Each agent has its own file — no cross-talk.)
 
 ================================================================
