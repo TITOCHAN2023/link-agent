@@ -43,7 +43,7 @@ async function bridgeRun(fn) {
 const rc = loadRC();
 
 const program = new Command();
-program.name('agentlink').description('P2P encrypted communication between AI agents').version('0.1.0');
+program.name('link-agent').description('P2P encrypted communication between AI agents').version('0.1.0');
 
 /** Pick AgentJSON (--json) or AgentClient (interactive) */
 function makeClient(opts, extra = {}) {
@@ -64,7 +64,7 @@ program
     const client = makeClient(opts, roomId ? { room: roomId } : {});
 
     if (!opts.json) {
-      console.log(chalk.bold('\n🔗 agentlink — Connect\n'));
+      console.log(chalk.bold('\n🔗 link-agent — Connect\n'));
       if (roomId) {
         console.log(chalk.gray(`Room: ${roomId} | Permission: ${opts.perm.toUpperCase()}\n`));
       }
@@ -108,7 +108,7 @@ program
     if (!opts.json) {
       client.transport.on('room', (id) => {
         console.log(chalk.bold.cyan(`📌 Room: ${id}`));
-        console.log(chalk.cyan(`   agentlink connect ${id} -s ws://<IP>:${port}\n`));
+        console.log(chalk.cyan(`   link-agent connect ${id} -s ws://<IP>:${port}\n`));
       });
     }
     client.start();
@@ -382,18 +382,18 @@ program
   .action(() => {
     console.log(`\
 ================================================================
-  agentlink — AI Agent P2P Communication Guide
+  link-agent — AI Agent P2P Communication Guide
 ================================================================
 
 WHAT IS THIS?
-  agentlink lets you send messages to another AI agent over an
+  link-agent lets you send messages to another AI agent over an
   encrypted P2P connection. You run commands, get JSON back.
 
 !! IMPORTANT — READ THIS FIRST !!
-  ALL commands in this guide start with "agentlink bridge ...".
-  Do NOT use "agentlink connect" (without "bridge") — that is a
+  ALL commands in this guide start with "link-agent bridge ...".
+  Do NOT use "link-agent connect" (without "bridge") — that is a
   different mode (L2 direct) that will CONFLICT with the bridge.
-  Always use: agentlink bridge connect, bridge send, bridge recv.
+  Always use: link-agent bridge connect, bridge send, bridge recv.
 
 ================================================================
   SETUP (do this once before anything else)
@@ -401,14 +401,14 @@ WHAT IS THIS?
 
 STEP 1 — Check if bridge is already running:
 
-  RUN:    agentlink bridge status
+  RUN:    link-agent bridge status
   IF OK:  You get JSON with "connected" field → bridge is running.
           First time? Read AUTO-MONITORING below. Otherwise skip to STEP 3.
   IF ERR: "ECONNREFUSED" → bridge not running, go to STEP 2
 
 STEP 2 — Start the bridge:
 
-  RUN:    agentlink bridge
+  RUN:    link-agent bridge
   OUTPUT: {"pid":12345,"port":7654}
   MEANING: Bridge is running in background on port 7654.
   NOTE:   Run this only ONCE. It stays running.
@@ -419,7 +419,7 @@ STEP 2 — Start the bridge:
 
   WHY: While you are busy doing other work, messages may arrive.
   The bridge AUTO-WRITES a notification file for each agent at:
-    /tmp/agentlink_notify_YOUR_AGENT_ID
+    /tmp/link-agent_notify_YOUR_AGENT_ID
   You just need a way to CHECK that file periodically.
 
   PICK THE SECTION THAT MATCHES YOUR PLATFORM:
@@ -437,7 +437,7 @@ STEP 2 — Start the bridge:
              "hooks": [
                {
                  "type": "command",
-                 "command": "if [ -s /tmp/agentlink_notify_YOUR_AGENT_ID ]; then echo '[AgentLink] New messages — run: agentlink bridge recv --agent YOUR_AGENT_ID'; fi"
+                 "command": "if [ -s /tmp/link-agent_notify_YOUR_AGENT_ID ]; then echo '[AgentLink] New messages — run: link-agent bridge recv --agent YOUR_AGENT_ID'; fi"
                }
              ]
            }
@@ -446,14 +446,14 @@ STEP 2 — Start the bridge:
      }
 
   After reading messages, clear YOUR notification file:
-    > /tmp/agentlink_notify_YOUR_AGENT_ID
+    > /tmp/link-agent_notify_YOUR_AGENT_ID
 
-  THAT'S IT. The bridge writes /tmp/agentlink_notify_YOUR_AGENT_ID
+  THAT'S IT. The bridge writes /tmp/link-agent_notify_YOUR_AGENT_ID
   automatically when messages arrive. No --on-message needed.
 
   ── IF YOU ARE Cursor / Windsurf ───────────────────────────
 
-  Create .cursor/rules/agentlink.mdc (Cursor) or add to
+  Create .cursor/rules/link-agent.mdc (Cursor) or add to
   .windsurfrules (Windsurf):
 
      ---
@@ -461,37 +461,37 @@ STEP 2 — Start the bridge:
      globs: *
      alwaysApply: true
      ---
-     A agentlink bridge is running on port 7654.
+     A link-agent bridge is running on port 7654.
      Your agent identity: cursor-a
-     Connect: agentlink bridge connect ROOM --agent cursor-a
-     Check:   agentlink bridge recv --agent cursor-a --wait 5
-     Send:    agentlink bridge send --agent cursor-a "your reply"
-     Notification file: /tmp/agentlink_notify_cursor-a (auto-written)
-     Full guide: agentlink guide
+     Connect: link-agent bridge connect ROOM --agent cursor-a
+     Check:   link-agent bridge recv --agent cursor-a --wait 5
+     Send:    link-agent bridge send --agent cursor-a "your reply"
+     Notification file: /tmp/link-agent_notify_cursor-a (auto-written)
+     Full guide: link-agent guide
 
   ── IF YOU ARE Cline ───────────────────────────────────────
 
   Add to .clinerules in your project:
 
      # AgentLink bridge runs on port 7654. Agent ID: cline-a
-     # Connect:  agentlink bridge connect ROOM --agent cline-a
-     # Receive:  agentlink bridge recv --agent cline-a --wait 5
-     # Send:     agentlink bridge send --agent cline-a "your message"
-     # Notifications auto-written to: /tmp/agentlink_notify_cline-a
-     # Full guide: agentlink guide
+     # Connect:  link-agent bridge connect ROOM --agent cline-a
+     # Receive:  link-agent bridge recv --agent cline-a --wait 5
+     # Send:     link-agent bridge send --agent cline-a "your message"
+     # Notifications auto-written to: /tmp/link-agent_notify_cline-a
+     # Full guide: link-agent guide
 
   ── IF YOU ARE any other agent ─────────────────────────────
 
   Connect with your identity:
-    agentlink bridge connect ROOM --agent my-agent
+    link-agent bridge connect ROOM --agent my-agent
 
-  The bridge auto-writes /tmp/agentlink_notify_my-agent on messages.
+  The bridge auto-writes /tmp/link-agent_notify_my-agent on messages.
   In your work loop, check it:
-    cat /tmp/agentlink_notify_my-agent
+    cat /tmp/link-agent_notify_my-agent
   If non-empty, read messages:
-    agentlink bridge recv --agent my-agent
+    link-agent bridge recv --agent my-agent
   Then clear:
-    > /tmp/agentlink_notify_my-agent
+    > /tmp/link-agent_notify_my-agent
 
 ================================================================
   CONNECT TO A ROOM
@@ -499,21 +499,21 @@ STEP 2 — Start the bridge:
 
 STEP 3 — Create a new room OR join an existing one:
 
-  !! Use "agentlink bridge connect" (with "bridge"), NOT "agentlink connect" !!
+  !! Use "link-agent bridge connect" (with "bridge"), NOT "link-agent connect" !!
 
   TO CREATE A NEW ROOM:
-    RUN:    agentlink bridge connect
+    RUN:    link-agent bridge connect
     OUTPUT: {"roomId":"a1b2c3d4","inbox":"/path/to/inbox.jsonl","invite":"/path/to/invite.txt"}
     NEXT:   Give the roomId value to the other agent (keep it secret!)
 
   TO JOIN AN EXISTING ROOM (you received a roomId from someone):
-    RUN:    agentlink bridge connect ROOM_ID_HERE
+    RUN:    link-agent bridge connect ROOM_ID_HERE
     OUTPUT: {"roomId":"ROOM_ID_HERE","inbox":"...","invite":"..."}
-    EXAMPLE: agentlink bridge connect a1b2c3d4
+    EXAMPLE: link-agent bridge connect a1b2c3d4
 
   WITH AGENT IDENTITY (recommended for multi-agent setups):
-    CREATE:  agentlink bridge connect --agent MY_AGENT_ID
-    JOIN:    agentlink bridge connect ROOM_ID --agent MY_AGENT_ID
+    CREATE:  link-agent bridge connect --agent MY_AGENT_ID
+    JOIN:    link-agent bridge connect ROOM_ID --agent MY_AGENT_ID
     WHY:     Each agent gets its own message queue and notification file.
              Without --agent, all agents share one queue (old behavior).
 
@@ -530,14 +530,14 @@ STEP 3 — Create a new room OR join an existing one:
     {
       "roomId": "a1b2c3d4",         ← Share this with the other agent
       "agentId": "MY_AGENT_ID",     ← Your identity on this bridge
-      "notify": "/tmp/agentlink_notify_MY_AGENT_ID",  ← Auto-written on new messages
-      "recv": "agentlink bridge recv --agent MY_AGENT_ID --wait 30",  ← Run this to get messages
-      "hookCheck": "[ -s /tmp/agentlink_notify_MY_AGENT_ID ]"  ← Use in PostToolUse hook
+      "notify": "/tmp/link-agent_notify_MY_AGENT_ID",  ← Auto-written on new messages
+      "recv": "link-agent bridge recv --agent MY_AGENT_ID --wait 30",  ← Run this to get messages
+      "hookCheck": "[ -s /tmp/link-agent_notify_MY_AGENT_ID ]"  ← Use in PostToolUse hook
     }
 
 STEP 4 — Wait for the other agent to connect:
 
-  RUN:    agentlink bridge status
+  RUN:    link-agent bridge status
   OUTPUT: {"connected":true,"peer":"TheirName","permission":"helper",...}
   IF "connected" IS false: Wait and try again in a few seconds.
   IF "connected" IS true:  Ready to send and receive messages!
@@ -548,31 +548,31 @@ STEP 4 — Wait for the other agent to connect:
 
 STEP 5 — Send a chat message (most common):
 
-  RUN:    agentlink bridge send "your message text here"
+  RUN:    link-agent bridge send "your message text here"
   OUTPUT: {"ok":true,"id":"abc123","roomId":"a1b2c3d4"}
   IF "ok" IS true: Message sent successfully.
 
   EXAMPLES:
-    agentlink bridge send "Hello, are you there?"
-    agentlink bridge send "The test results look good."
-    agentlink bridge send "Please review the code in src/app.js"
+    link-agent bridge send "Hello, are you there?"
+    link-agent bridge send "The test results look good."
+    link-agent bridge send "Please review the code in src/app.js"
 
 SEND WITH AGENT IDENTITY:
 
-  agentlink bridge send --agent MY_AGENT_ID "your message"
+  link-agent bridge send --agent MY_AGENT_ID "your message"
   (Tracks origin so replies come back to YOUR queue, not others.)
 
 SEND OTHER MESSAGE TYPES:
 
-  Task:    agentlink bridge send -t task --desc "review app.js"
-  Query:   agentlink bridge send -t query "what framework do you use?"
-  File:    agentlink bridge send -t file --file-name "data.json" '{"key":"value"}'
-  Result:  agentlink bridge send -t result --data '{"status":"done"}'
+  Task:    link-agent bridge send -t task --desc "review app.js"
+  Query:   link-agent bridge send -t query "what framework do you use?"
+  File:    link-agent bridge send -t file --file-name "data.json" '{"key":"value"}'
+  Result:  link-agent bridge send -t result --data '{"status":"done"}'
 
 PRIORITY — Mark urgent messages so they are delivered first:
 
-  agentlink bridge send --priority high "URGENT: server is down"
-  agentlink bridge send --priority low "FYI: updated docs"
+  link-agent bridge send --priority high "URGENT: server is down"
+  link-agent bridge send --priority low "FYI: updated docs"
   (default is "normal". Receiver gets high-priority messages first.)
 
 ================================================================
@@ -581,7 +581,7 @@ PRIORITY — Mark urgent messages so they are delivered first:
 
 STEP 6 — Check for new messages:
 
-  RUN:    agentlink bridge recv --wait 10
+  RUN:    link-agent bridge recv --wait 10
   THIS WAITS UP TO 10 SECONDS FOR MESSAGES.
 
   IF MESSAGES EXIST, OUTPUT LOOKS LIKE:
@@ -608,20 +608,20 @@ STEP 6 — Check for new messages:
     - For file:   the filename is in payload.name, content in payload.content
 
   WITH AGENT IDENTITY (your own queue):
-    RUN: agentlink bridge recv --agent MY_AGENT_ID --wait 10
+    RUN: link-agent bridge recv --agent MY_AGENT_ID --wait 10
     Only returns messages routed to YOUR agent — replies to your sends
     go only to you, broadcast messages go to everyone.
 
   QUICK CHECK (no waiting):
-    RUN: agentlink bridge recv
+    RUN: link-agent bridge recv
 
   LIMIT (backpressure — process N messages at a time):
-    RUN: agentlink bridge recv --limit 5
+    RUN: link-agent bridge recv --limit 5
     Returns at most 5 messages, highest priority first.
     Remaining messages stay in queue for next recv call.
 
   READ FULL HISTORY (shared inbox — all messages, all agents):
-    RUN: agentlink bridge recv --all
+    RUN: link-agent bridge recv --all
     NOTE: --all reads from the shared inbox file, NOT your per-agent queue.
           It shows ALL messages regardless of --agent.
 
@@ -629,11 +629,11 @@ STEP 6 — Check for new messages:
   STATUS & MANAGEMENT
 ================================================================
 
-  CHECK STATUS:     agentlink bridge status
-  LIST ALL ROOMS:   agentlink bridge rooms
-  CLOSE ONE ROOM:   agentlink bridge close ROOM_ID_HERE
-  CLOSE ALL ROOMS:  agentlink bridge close
-  STOP BRIDGE:      agentlink bridge stop PID_HERE
+  CHECK STATUS:     link-agent bridge status
+  LIST ALL ROOMS:   link-agent bridge rooms
+  CLOSE ONE ROOM:   link-agent bridge close ROOM_ID_HERE
+  CLOSE ALL ROOMS:  link-agent bridge close
+  STOP BRIDGE:      link-agent bridge stop PID_HERE
 
 ================================================================
   TASK TRACKING — Monitor delegated tasks
@@ -642,13 +642,13 @@ STEP 6 — Check for new messages:
   When you send a task, the bridge automatically tracks it.
 
   LIST ALL TASKS:
-    RUN:    agentlink bridge tasks
+    RUN:    link-agent bridge tasks
     OUTPUT: [{"id":"abc","description":"review app.js","state":"sent","sentAt":...}]
 
   FILTER BY STATE:
-    agentlink bridge tasks --state sent        # waiting for response
-    agentlink bridge tasks --state acked       # peer received it
-    agentlink bridge tasks --state completed   # result received
+    link-agent bridge tasks --state sent        # waiting for response
+    link-agent bridge tasks --state acked       # peer received it
+    link-agent bridge tasks --state completed   # result received
 
   TASK STATES:
     sent      → Task sent, waiting for peer to receive
@@ -656,7 +656,7 @@ STEP 6 — Check for new messages:
     completed → Peer returned a result (result message with replyTo)
 
   HOW IT WORKS:
-    1. You send: agentlink bridge send -t task --desc "review code"
+    1. You send: link-agent bridge send -t task --desc "review code"
     2. Bridge auto-tracks it (state: sent)
     3. Peer ACKs → state: acked
     4. Peer sends result with --reply-to YOUR_TASK_ID → state: completed
@@ -667,10 +667,10 @@ STEP 6 — Check for new messages:
 
   Default is "helper". Change per room at runtime:
 
-  agentlink bridge perm helper                 # collaboration mode (default)
-  agentlink bridge perm chat                   # untrusted peer, chat only
-  agentlink bridge perm intimate               # fully trusted, all access
-  agentlink bridge perm helper -r ROOM_ID      # target specific room
+  link-agent bridge perm helper                 # collaboration mode (default)
+  link-agent bridge perm chat                   # untrusted peer, chat only
+  link-agent bridge perm intimate               # fully trusted, all access
+  link-agent bridge perm helper -r ROOM_ID      # target specific room
 
   WHEN TO USE EACH:
     helper   → Default for most cases. Chat + task + file, private data filtered.
@@ -683,20 +683,20 @@ STEP 6 — Check for new messages:
 
   PROBLEM: "ECONNREFUSED" on any command
   CAUSE:   Bridge is not running.
-  FIX:     Run: agentlink bridge
+  FIX:     Run: link-agent bridge
 
   PROBLEM: send returns {"error":"No room"}
   CAUSE:   You haven't connected to a room yet.
-  FIX:     Run: agentlink bridge connect   (or: agentlink bridge connect ROOM_ID)
+  FIX:     Run: link-agent bridge connect   (or: link-agent bridge connect ROOM_ID)
 
   PROBLEM: send returns {"error":"Room '...' not connected"}
   CAUSE:   P2P connection not established yet. The other agent may not have joined.
-  FIX:     Run: agentlink bridge status   — check if "connected" is true.
+  FIX:     Run: link-agent bridge status   — check if "connected" is true.
            If false, wait and check again. The bridge auto-reconnects.
 
   PROBLEM: recv returns []
   CAUSE:   No new messages. This is normal.
-  FIX:     Use --wait flag to long-poll: agentlink bridge recv --wait 30
+  FIX:     Use --wait flag to long-poll: link-agent bridge recv --wait 30
 
   PROBLEM: recv returns messages with empty content
   CAUSE:   The sender used a different field name (text vs content).
@@ -705,7 +705,7 @@ STEP 6 — Check for new messages:
   PROBLEM: recv returns [] but I know messages were sent (and I used --agent before)
   CAUSE:   You connected with --agent but forgot --agent on recv.
            With agents registered, messages go to per-agent queues only.
-  FIX:     Add --agent YOUR_ID: agentlink bridge recv --agent YOUR_ID --wait 10
+  FIX:     Add --agent YOUR_ID: link-agent bridge recv --agent YOUR_ID --wait 10
 
   PROBLEM: connect returns "Invalid agentId"
   CAUSE:   agentId has spaces or special characters.
@@ -721,35 +721,35 @@ STEP 6 — Check for new messages:
            self-host a TURN relay server (coturn).
 
   PROBLEM: Bridge keeps disconnecting / reconnectAttempt keeps increasing
-  CAUSE:   Someone used "agentlink connect" (direct L2 mode) on the same room.
+  CAUSE:   Someone used "link-agent connect" (direct L2 mode) on the same room.
            Direct connect steals the P2P peer slot from the bridge.
-  FIX:     NEVER use "agentlink connect" on a room managed by a bridge.
-           Always use "agentlink bridge connect ROOM_ID" instead.
+  FIX:     NEVER use "link-agent connect" on a room managed by a bridge.
+           Always use "link-agent bridge connect ROOM_ID" instead.
 
 ================================================================
   COMPLETE EXAMPLE — FULL CONVERSATION
 ================================================================
 
   AGENT A (creates room):
-    agentlink bridge
-    agentlink bridge connect
+    link-agent bridge
+    link-agent bridge connect
     # Output: {"roomId":"a1b2c3d4",...}
     # → Tell Agent B the roomId is "a1b2c3d4"
 
   AGENT B (joins room):
-    agentlink bridge
-    agentlink bridge connect a1b2c3d4
+    link-agent bridge
+    link-agent bridge connect a1b2c3d4
 
   AGENT A (sends message):
-    agentlink bridge send "Hi Agent B, can you review my code?"
+    link-agent bridge send "Hi Agent B, can you review my code?"
 
   AGENT B (receives and replies):
-    agentlink bridge recv --wait 30
+    link-agent bridge recv --wait 30
     # Output: [{"type":"chat","payload":{"content":"Hi Agent B, can you review my code?"},"from":"AgentA",...}]
-    agentlink bridge send "Sure, send me the file."
+    link-agent bridge send "Sure, send me the file."
 
   AGENT A (receives reply):
-    agentlink bridge recv --wait 30
+    link-agent bridge recv --wait 30
     # Output: [{"type":"chat","payload":{"content":"Sure, send me the file."},"from":"AgentB",...}]
 
 ================================================================
@@ -757,38 +757,38 @@ STEP 6 — Check for new messages:
 ================================================================
 
   SETUP (same bridge for both agents):
-    agentlink bridge
+    link-agent bridge
 
   AGENT A:
-    agentlink bridge connect --agent agent-a
-    # → {"roomId":"a1b2c3d4","agentId":"agent-a","notify":"/tmp/agentlink_notify_agent-a",...}
+    link-agent bridge connect --agent agent-a
+    # → {"roomId":"a1b2c3d4","agentId":"agent-a","notify":"/tmp/link-agent_notify_agent-a",...}
     # → Share roomId "a1b2c3d4" with Agent B
 
   AGENT B (same machine, same bridge, same room):
-    agentlink bridge connect a1b2c3d4 --agent agent-b
+    link-agent bridge connect a1b2c3d4 --agent agent-b
     # → Transport reused, separate message queue
 
   AGENT A sends:
-    agentlink bridge send --agent agent-a "Hello Agent B"
+    link-agent bridge send --agent agent-a "Hello Agent B"
 
   AGENT B receives (only gets messages from its own queue):
-    agentlink bridge recv --agent agent-b --wait 30
+    link-agent bridge recv --agent agent-b --wait 30
     # → [{"type":"chat","payload":{"content":"Hello Agent B"},...}]
 
   AGENT B replies:
-    agentlink bridge send --agent agent-b "Got it, working on it"
+    link-agent bridge send --agent agent-b "Got it, working on it"
 
   AGENT A receives (reply routed back to sender):
-    agentlink bridge recv --agent agent-a --wait 30
+    link-agent bridge recv --agent agent-a --wait 30
     # → [{"type":"chat","payload":{"content":"Got it, working on it"},...}]
 
   CHECK WHO IS IN THE ROOM:
-    agentlink bridge rooms
+    link-agent bridge rooms
     # → [{"roomId":"a1b2c3d4","agents":["agent-a","agent-b"],...}]
 
   NOTIFICATION FILES (auto-written by bridge):
-    Agent A checks: cat /tmp/agentlink_notify_agent-a
-    Agent B checks: cat /tmp/agentlink_notify_agent-b
+    Agent A checks: cat /tmp/link-agent_notify_agent-a
+    Agent B checks: cat /tmp/link-agent_notify_agent-b
     (Each agent has its own file — no cross-talk.)
 
 ================================================================

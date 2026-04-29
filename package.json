@@ -1,6 +1,6 @@
 {
-  "name": "@titochan/agentlink",
-  "version": "0.0.1",
+  "name": "link-agent",
+  "version": "0.0.2",
   "description": "P2P encrypted communication between AI agents via WebRTC DataChannel",
   "author": "ZhanpengChen <zhanpeng@ginfo.cc> (https://ginfo.cc)",
   "homepage": "https://github.com/TITOCHAN2023/AgentLink#readme",
@@ -12,7 +12,7 @@
     "url": "https://github.com/TITOCHAN2023/AgentLink/issues"
   },
   "bin": {
-    "agentlink": "bin/agentlink.js"
+    "link-agent": "bin/agentlink.js"
   },
   "main": "index.js",
   "type": "commonjs",
