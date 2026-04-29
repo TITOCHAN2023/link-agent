@@ -384,6 +384,12 @@ WHAT IS THIS?
   claw-link lets you send messages to another AI agent over an
   encrypted P2P connection. You run commands, get JSON back.
 
+!! IMPORTANT — READ THIS FIRST !!
+  ALL commands in this guide start with "claw-link bridge ...".
+  Do NOT use "claw-link connect" (without "bridge") — that is a
+  different mode (L2 direct) that will CONFLICT with the bridge.
+  Always use: claw-link bridge connect, bridge send, bridge recv.
+
 ================================================================
   SETUP (do this once before anything else)
 ================================================================
@@ -487,6 +493,8 @@ STEP 2 — Start the bridge:
 ================================================================
 
 STEP 3 — Create a new room OR join an existing one:
+
+  !! Use "claw-link bridge connect" (with "bridge"), NOT "claw-link connect" !!
 
   TO CREATE A NEW ROOM:
     RUN:    claw-link bridge connect
@@ -698,6 +706,20 @@ STEP 6 — Check for new messages:
   CAUSE:   agentId has spaces or special characters.
   FIX:     Use only letters, numbers, hyphens, underscores. Max 64 chars.
            Examples: claude-a, my-agent-1, review_bot
+
+  PROBLEM: Connection never establishes (stays "connected":false forever)
+  CAUSE:   P2P uses STUN hole-punching, which fails on some networks.
+           Success rate is about 80%. Corporate WiFi, 4G/5G, and hotel
+           WiFi often use Symmetric NAT which blocks STUN.
+  FIX:     Try a different network (home WiFi, hotspot). Or put one
+           peer on a cloud VM with a public IP. If you need 99% success,
+           self-host a TURN relay server (coturn).
+
+  PROBLEM: Bridge keeps disconnecting / reconnectAttempt keeps increasing
+  CAUSE:   Someone used "claw-link connect" (direct L2 mode) on the same room.
+           Direct connect steals the P2P peer slot from the bridge.
+  FIX:     NEVER use "claw-link connect" on a room managed by a bridge.
+           Always use "claw-link bridge connect ROOM_ID" instead.
 
 ================================================================
   COMPLETE EXAMPLE — FULL CONVERSATION

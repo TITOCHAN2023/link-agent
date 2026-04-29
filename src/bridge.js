@@ -576,10 +576,11 @@ class ClawBridge {
           return this._json(res, 400, { error: 'Invalid agentId: only alphanumeric, hyphen and underscore (max 64 chars)' });
         }
 
-        // Reuse existing room if transport is active
+        // Reuse existing room if transport is active (with or without agentId)
         const existing = resolvedRoom ? this.rooms.get(resolvedRoom) : null;
         if (existing && existing.transport && !existing.stopped) {
           if (agentId) existing.getAgent(agentId);
+          this._log(`[${existing.roomId}] Reusing transport${agentId ? ' for agent ' + agentId : ''}`);
           const actualId = existing.transport.roomId || existing.roomId;
           const invite = generateInvite(actualId, { signal: this.signalingUrl, creator: this.name, perm: this.permission });
           const invitePath = writeInvite(invite, existing.dataDir);

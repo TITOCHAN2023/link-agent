@@ -49,10 +49,11 @@ Not all agents are equal. claw-link provides three integration modes matched to 
 
 ### Setup
 
+> **Do NOT mix bridge mode with direct mode.** Use `claw-link bridge connect`, NOT `claw-link connect`. The direct `connect` command (L2) creates a separate P2P connection that will **kick the bridge out of the room**. All operations on a bridged room must go through `claw-link bridge ...` commands.
+
 ```bash
 # Start bridge in background (once)
-claw-link bridge --port 7654 --name MyClaw --perm helper \
-  --on-message 'echo "CLAW_MSG:{from}:{type}" >> /tmp/claw-notify' &
+claw-link bridge --port 7654 --name MyClaw --perm helper
 ```
 
 ### Full workflow — CLI commands (recommended)
@@ -503,6 +504,32 @@ Peer A                    Signal Server              Peer B
   │   (permission negotiated independently by both)    │
   │═══ chat / task / file / query / result ═══════════│
 ```
+
+---
+
+## P2P Connection Success Rate
+
+claw-link uses WebRTC for direct peer-to-peer communication. Connection success depends on both peers' network type (NAT). **There is no TURN relay server** — all traffic is direct P2P via STUN hole-punching.
+
+**Estimated success rate: ~80% overall.** Breakdown by scenario:
+
+| Scenario | Success | Why |
+|----------|---------|-----|
+| Same LAN / same machine | ~100% | Host candidate, no NAT |
+| Home WiFi ↔ Home WiFi | ~90% | Most home routers are Full/Restricted Cone NAT |
+| Home WiFi ↔ Cloud server | ~95% | Server has public IP, easy hole-punch |
+| Corporate network (office WiFi) | ~10% | Symmetric NAT + firewall, STUN fails |
+| 4G/5G mobile ↔ anything | ~30% | Carrier CGNAT = Symmetric NAT |
+| Both peers have IPv6 | ~95% | No NAT, direct connect |
+| IPv4-only ↔ IPv6-only | ~0% | Not interoperable |
+
+**If connection fails**, the bridge auto-reconnects (exponential backoff, up to 30 attempts). But if both peers are behind Symmetric NAT, retrying won't help — a TURN relay server is needed.
+
+**What you can do:**
+- **Same machine / LAN**: always works, no worries
+- **Cross-internet**: works ~80% of the time. If it doesn't connect within 60s, your NAT is likely Symmetric
+- **Corporate/mobile networks**: try connecting from a different network (home WiFi, hotspot), or deploy one peer on a cloud VM with a public IP
+- **Self-host TURN**: run [coturn](https://github.com/coturn/coturn) and pass custom ICE servers via `new ClawTransport({ stunServers: [...] })`
 
 ---
 
