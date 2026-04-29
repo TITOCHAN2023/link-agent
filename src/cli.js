@@ -132,10 +132,14 @@ const bridgeCmd = program
   .option('--intro <text>', 'Self-introduction sent on connect', rc.intro || '')
   .option('--tg-token <token>', 'Telegram bot token for notifications', rc.tgToken || '')
   .option('--tg-chat <id>', 'Telegram chat ID for notifications', rc.tgChatId || '')
+  .option('--ice <servers>', 'Custom ICE servers (comma-separated, supports TURN: "turn:host:port?username=X&credential=Y")')
   .option('--foreground', 'Run in foreground (don\'t daemonize)')
   .option('--daemon-child', '(internal) actual bridge process')
   .action(async (opts) => {
     const port = parseInt(opts.port, 10);
+    const iceRaw = opts.ice || process.env.CLAWLINK_ICE_SERVERS || null;
+    const iceServers = iceRaw ? iceRaw.split(',').map(s => s.trim()).filter(Boolean)
+                              : (rc.iceServers || null);
     const bridgeOpts = {
       port,
       signalingUrl: opts.signal,
@@ -150,6 +154,7 @@ const bridgeCmd = program
       tgChatId: opts.tgChat,
       aliases: rc.aliases,
       notify: rc.notify,
+      iceServers,
     };
 
     // ── If this is the daemon child, run the bridge ──

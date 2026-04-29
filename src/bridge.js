@@ -217,6 +217,7 @@ class ClawBridge {
     aliases,
     notify,
     intro,
+    iceServers,
   } = {}) {
     this.port = port;
     this.maxPortRetries = maxPortRetries;
@@ -224,6 +225,7 @@ class ClawBridge {
     this.name = name;
     this.permission = permission;
     this.intro = intro || '';
+    this._iceServers = iceServers || null;
     this._aliases = aliases || {};
 
     this.hooks = { connect: onConnect, message: onMessage, disconnect: onDisconnect };
@@ -312,12 +314,14 @@ class ClawBridge {
     room.stopped = false;
     this._clearTimers(room);
 
-    room.transport = new ClawTransport({
+    const transportOpts = {
       signalingUrl: this.signalingUrl,
       name: this.name,
       permission: this.permission,
       room: targetRoomId,
-    });
+    };
+    if (this._iceServers) transportOpts.iceServers = this._iceServers;
+    room.transport = new ClawTransport(transportOpts);
 
     // Connection timeout: if peer doesn't show up in 60s, force reconnect
     room._connectTimeout = setTimeout(() => {
@@ -665,6 +669,9 @@ class ClawBridge {
           reconnectAttempt: room.reconnectAttempt,
           inbox: room.inboxPath,
           agents: [...room.agentQueues.entries()].map(([id, a]) => ({ id, unread: a.unread.length })),
+          ...(room.reconnectAttempt >= 3 && !room.peerName ? {
+            connectionHint: 'P2P connection failing. Possible Symmetric NAT. Ask user for TURN server config: claw-link bridge --ice "turn:host:port?username=X&credential=Y"',
+          } : {}),
         });
       }
 

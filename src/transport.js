@@ -16,6 +16,24 @@ const STUN_SERVERS = [
   'stun:stun1.l.google.com:19302',
 ];
 
+/**
+ * Parse user-friendly ICE server strings into node-datachannel format.
+ *   "stun:host:port"                                → as-is
+ *   "turn:host:port?username=X&credential=Y"        → "turn:host:port:X:Y"
+ *   "turn:host:port:username:password"               → as-is
+ */
+function parseIceServer(s) {
+  if (!s || typeof s !== 'string') return null;
+  if (s.startsWith('turn:') && s.includes('?')) {
+    const [base, qs] = s.split('?');
+    const params = new URLSearchParams(qs);
+    const user = params.get('username') || '';
+    const cred = params.get('credential') || params.get('password') || '';
+    if (user && cred) return `${base}:${user}:${cred}`;
+  }
+  return s;
+}
+
 const DEFAULT_SIGNALING = 'wss://ginfo.cc/signal/';
 
 /**
@@ -41,7 +59,8 @@ class ClawTransport extends EventEmitter {
    * @param {string} [opts.name]          Local peer name
    * @param {string} [opts.permission]    Requested permission: intimate|helper|chat
    * @param {string} [opts.room]          Room ID to join (omit to create new room)
-   * @param {string[]} [opts.stunServers] Override STUN server list
+   * @param {string[]} [opts.stunServers] Override STUN server list (deprecated, use iceServers)
+   * @param {string[]} [opts.iceServers]  ICE servers (STUN and/or TURN)
    */
   constructor({
     signalingUrl = DEFAULT_SIGNALING,
@@ -49,6 +68,7 @@ class ClawTransport extends EventEmitter {
     permission = 'helper',
     room,
     stunServers,
+    iceServers,
   } = {}) {
     super();
     this.signalingUrl = signalingUrl;
@@ -59,7 +79,8 @@ class ClawTransport extends EventEmitter {
     this.roomId = null;
 
     this._room = room || null;
-    this._stunServers = (stunServers || STUN_SERVERS).slice(0, 3);
+    const raw = iceServers || stunServers || STUN_SERVERS;
+    this._iceServers = raw.map(parseIceServer).filter(Boolean);
     this._ws = null;
     this._pc = null;
     this._dc = null;
@@ -80,7 +101,7 @@ class ClawTransport extends EventEmitter {
     }
 
     this._log(`Connecting to ${wsUrl}`);
-    this._log(`STUN: ${this._stunServers.join(', ')}`);
+    this._log(`ICE: ${this._iceServers.map(s => s.replace(/:[^:]+:[^:]+$/, ':***:***')).join(', ')}`);
     this._ws = new WebSocket(wsUrl);
 
     this._ws.on('open', () => {
@@ -189,7 +210,7 @@ class ClawTransport extends EventEmitter {
 
   _initPeer() {
     this._pc = new nodeDataChannel.PeerConnection(this.name, {
-      iceServers: this._stunServers,
+      iceServers: this._iceServers,
     });
     this._pc.onLocalDescription((sdp, type) => {
       this._log(`Local description: ${type}`);
@@ -288,4 +309,4 @@ class ClawTransport extends EventEmitter {
   _log(text) { this.emit('log', text); }
 }
 
-module.exports = { ClawTransport, DEFAULT_SIGNALING, STUN_SERVERS };
+module.exports = { ClawTransport, DEFAULT_SIGNALING, STUN_SERVERS, parseIceServer };
